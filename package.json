@@ -1,0 +1,21 @@
+{
+  "name": "tauri-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 192.168.0.56",
+    "build": "bun run tsc src/injector.ts --outFile src/injector.js --target ES2020 --lib ES2020,DOM --skipLibCheck && tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "vite": "^6.0.3",
+    "typescript": "~5.6.2"
+  }
+}
