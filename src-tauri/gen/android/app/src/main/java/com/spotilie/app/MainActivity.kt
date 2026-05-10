@@ -2,7 +2,6 @@ package com.spotilie.app
 
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,26 +11,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.webkit.WebView
-import android.content.BroadcastReceiver
+import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 
 class MainActivity : TauriActivity() {
   companion object {
     var instance: MainActivity? = null
-  }
-
-  private val mediaReceiver = object : BroadcastReceiver() {
-    override fun onReceive(context: Context?, intent: Intent?) {
-      val action = intent?.action ?: return
-      
-      val jsAction = when (action) {
-        "com.spotilie.app.PLAY" -> "play"
-        "com.spotilie.app.PAUSE" -> "pause"
-        "com.spotilie.app.NEXT" -> "next"
-        "com.spotilie.app.PREV" -> "prev"
-        else -> return
-      }
-      handleMediaAction(jsAction)
-    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,19 +27,6 @@ class MainActivity : TauriActivity() {
     val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
     windowInsetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
-
-    val filter = IntentFilter().apply {
-        addAction("com.spotilie.app.PLAY")
-        addAction("com.spotilie.app.PAUSE")
-        addAction("com.spotilie.app.NEXT")
-        addAction("com.spotilie.app.PREV")
-    }
-    
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        registerReceiver(mediaReceiver, filter, Context.RECEIVER_EXPORTED)
-    } else {
-        registerReceiver(mediaReceiver, filter)
-    }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -69,6 +42,27 @@ class MainActivity : TauriActivity() {
     }
 
     startService(Intent(this, MediaForegroundService::class.java))
+
+    // Set up WebView error handling after a short delay to ensure Tauri has initialized the WebView
+    window.decorView.postDelayed({
+        findWebView(window.decorView)?.let { webView ->
+            webView.webViewClient = object : WebViewClient() {
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (request.isForMainFrame) {
+                        view.loadUrl("file:///android_asset/offline.html")
+                    }
+                }
+
+                // Fallback for older APIs if necessary
+                @Suppress("deprecation")
+                override fun onReceivedError(view: WebView, errorCode: Int, description: String, failingUrl: String) {
+                    if (failingUrl == view.url || failingUrl.contains("spotify.com")) {
+                        view.loadUrl("file:///android_asset/offline.html")
+                    }
+                }
+            }
+        }
+    }, 2000)
   }
 
   fun handleMediaAction(action: String) {
@@ -93,9 +87,6 @@ class MainActivity : TauriActivity() {
 
   override fun onDestroy() {
     instance = null
-    try {
-        unregisterReceiver(mediaReceiver)
-    } catch (e: Exception) {}
     super.onDestroy()
   }
 }

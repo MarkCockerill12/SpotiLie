@@ -332,12 +332,20 @@
   // ─── Media Controls (notification / headphone buttons → Spotify DOM) ──
   (window as any).spotilieMediaAction = function(action: string) {
     try {
-      var p = (document.querySelector('button[aria-label="Pause"]') || document.querySelector('button[aria-label="Play"]') || document.querySelector('[data-testid="control-button-playpause"]')) as HTMLElement | null;
-      var n = (document.querySelector('button[aria-label="Next"]') || document.querySelector('[data-testid="control-button-skip-forward"]')) as HTMLElement | null;
-      var b = (document.querySelector('button[aria-label="Previous"]') || document.querySelector('[data-testid="control-button-skip-back"]')) as HTMLElement | null;
-      if (action === 'play' || action === 'pause') p?.click();
-      if (action === 'next') n?.click();
-      if (action === 'prev') b?.click();
+      const playBtn = document.querySelector('button[aria-label="Play"]') || document.querySelector('[data-testid="control-button-playpause"][aria-label="Play"]') as HTMLElement | null;
+      const pauseBtn = document.querySelector('button[aria-label="Pause"]') || document.querySelector('[data-testid="control-button-playpause"][aria-label="Pause"]') as HTMLElement | null;
+      const nextBtn = document.querySelector('button[aria-label="Next"]') || document.querySelector('[data-testid="control-button-skip-forward"]') as HTMLElement | null;
+      const prevBtn = document.querySelector('button[aria-label="Previous"]') || document.querySelector('[data-testid="control-button-skip-back"]') as HTMLElement | null;
+
+      if (action === 'play') {
+        (playBtn as HTMLElement)?.click();
+      } else if (action === 'pause') {
+        (pauseBtn as HTMLElement)?.click();
+      } else if (action === 'next') {
+        (nextBtn as HTMLElement)?.click();
+      } else if (action === 'prev') {
+        (prevBtn as HTMLElement)?.click();
+      }
     } catch(e) {}
   };
 
