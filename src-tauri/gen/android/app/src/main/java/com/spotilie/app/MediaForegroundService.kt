@@ -23,49 +23,6 @@ class MediaForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── BroadcastReceiver: catches notification button taps ──────────
-    private val notificationActionReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val action = intent?.action ?: return
-            Log.d("SpotiLIE", "Notification action received: $action")
-            when (action) {
-                ACTION_UPDATE_MEDIA -> {
-                    val title = intent.getStringExtra("title") ?: "SpotiLIE"
-                    val artist = intent.getStringExtra("artist") ?: "Active"
-                    val isPlaying = intent.getBooleanExtra("isPlaying", false)
-                    currentIsPlaying = isPlaying
-                    updateMetadata(title, artist, isPlaying)
-                    val notification = createNotification(title, artist, isPlaying)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-                    } else {
-                        startForeground(1, notification)
-                    }
-                }
-                ACTION_PLAY  -> {
-                    mediaSession?.controller?.transportControls?.play()
-                    MainActivity.instance?.handleMediaAction("play")
-                }
-                ACTION_PAUSE -> {
-                    mediaSession?.controller?.transportControls?.pause()
-                    MainActivity.instance?.handleMediaAction("pause")
-                }
-                ACTION_NEXT  -> {
-                    mediaSession?.controller?.transportControls?.skipToNext()
-                    MainActivity.instance?.handleMediaAction("next")
-                }
-                ACTION_PREV  -> {
-                    mediaSession?.controller?.transportControls?.skipToPrevious()
-                    MainActivity.instance?.handleMediaAction("prev")
-                }
-                ACTION_TOGGLE -> {
-                    val act = if (currentIsPlaying) "pause" else "play"
-                    MainActivity.instance?.handleMediaAction(act)
-                }
-            }
-        }
-    }
-
     // ── BroadcastReceiver: Bluetooth / headphone disconnect ──────────
     private val noisyAudioReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -88,10 +45,10 @@ class MediaForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.e("SpotiLIE", "SERVICE_ON_CREATE")
+        Log.d("SpotiLIE", "MediaForegroundService onCreate")
         createNotificationChannel()
 
-        // Setup MediaSession
+        // Setup MediaSession for hardware / BT / OS media keys
         mediaSession = MediaSessionCompat(this, "SpotiLIEMediaSession").apply {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() { MainActivity.instance?.handleMediaAction("play") }
@@ -102,31 +59,7 @@ class MediaForegroundService : Service() {
             isActive = true
         }
 
-        // REQUIRED: Immediate startForeground to satisfy Android 12+
-        val notification = createNotification("SpotiLIE", "Ready to play", false)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(1, notification)
-        }
-
-        // Register notification action receiver (also handles UPDATE_MEDIA from Rust/JNI)
-        val actionFilter = IntentFilter().apply {
-            addAction(ACTION_UPDATE_MEDIA)
-            addAction(ACTION_PLAY)
-            addAction(ACTION_PAUSE)
-            addAction(ACTION_NEXT)
-            addAction(ACTION_PREV)
-            addAction(ACTION_TOGGLE)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(notificationActionReceiver, actionFilter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(notificationActionReceiver, actionFilter)
-        }
-
         // Register headphone/bluetooth disconnect receiver
-        // ACTION_AUDIO_BECOMING_NOISY is a system broadcast, needs RECEIVER_EXPORTED
         val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(noisyAudioReceiver, noisyFilter, Context.RECEIVER_EXPORTED)
@@ -134,8 +67,6 @@ class MediaForegroundService : Service() {
             registerReceiver(noisyAudioReceiver, noisyFilter)
         }
 
-        // Register Bluetooth ACL disconnect receiver (backup for devices that don't
-        // properly trigger ACTION_AUDIO_BECOMING_NOISY, e.g. some TWS earbuds)
         try {
             val btFilter = IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -144,29 +75,50 @@ class MediaForegroundService : Service() {
                 registerReceiver(bluetoothDisconnectReceiver, btFilter)
             }
         } catch (e: Exception) {
-            Log.w("SpotiLIE", "Could not register BT ACL receiver (permission may be missing): ${e.message}")
+            Log.w("SpotiLIE", "Could not register BT ACL receiver: ${e.message}")
         }
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SpotiLIE::BackgroundPlayback")
-        // 10-minute timeout as safety net — re-acquired on each metadata update
-        wakeLock?.acquire(10 * 60 * 1000L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_UPDATE_MEDIA) {
-            val title = intent.getStringExtra("title") ?: "SpotiLIE"
-            val artist = intent.getStringExtra("artist") ?: "Active"
-            val isPlaying = intent.getBooleanExtra("isPlaying", false)
-            currentIsPlaying = isPlaying
+        val action = intent?.action
+        Log.d("SpotiLIE", "Service onStartCommand action=$action")
 
-            updateMetadata(title, artist, isPlaying)
-            val notification = createNotification(title, artist, isPlaying)
+        when (action) {
+            ACTION_PLAY -> MainActivity.instance?.handleMediaAction("play")
+            ACTION_PAUSE -> MainActivity.instance?.handleMediaAction("pause")
+            ACTION_NEXT -> MainActivity.instance?.handleMediaAction("next")
+            ACTION_PREV -> MainActivity.instance?.handleMediaAction("prev")
+            ACTION_TOGGLE -> {
+                val act = if (currentIsPlaying) "pause" else "play"
+                MainActivity.instance?.handleMediaAction(act)
+            }
+            ACTION_UPDATE_MEDIA -> {
+                val title = intent.getStringExtra("title") ?: "SpotiLIE"
+                val artist = intent.getStringExtra("artist") ?: "Active"
+                val isPlaying = intent.getBooleanExtra("isPlaying", false)
+                currentIsPlaying = isPlaying
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-            } else {
-                startForeground(1, notification)
+                updateMetadata(title, artist, isPlaying)
+
+                if (isPlaying) {
+                    val notification = createNotification(title, artist, true)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                    } else {
+                        startForeground(1, notification)
+                    }
+                } else {
+                    // Only show notification when music IS playing
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                }
             }
         }
         return START_STICKY
@@ -180,7 +132,7 @@ class MediaForegroundService : Service() {
     }
 
     private fun updateMetadata(title: String, artist: String, isPlaying: Boolean) {
-        renewWakeLock() // Keep CPU alive for continuous playback
+        renewWakeLock()
         mediaSession?.let { session ->
             session.setMetadata(
                 MediaMetadataCompat.Builder()
@@ -217,17 +169,17 @@ class MediaForegroundService : Service() {
         }
     }
 
-    // ── Build PendingIntent for each notification button action ──────
+    // ── Build PendingIntent targeting this Service directly for button actions ──────
     private fun buildActionPendingIntent(action: String, requestCode: Int): PendingIntent {
-        val intent = Intent(action).apply {
-            setPackage(packageName)
+        val intent = Intent(this, MediaForegroundService::class.java).apply {
+            this.action = action
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         } else {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
-        return PendingIntent.getBroadcast(this, requestCode, intent, flags)
+        return PendingIntent.getService(this, requestCode, intent, flags)
     }
 
     private fun createNotification(title: String, artist: String, isPlaying: Boolean): Notification {
@@ -237,7 +189,6 @@ class MediaForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         )
 
-        // Build PendingIntents for each action button
         val prevPendingIntent = buildActionPendingIntent(ACTION_PREV, 1)
         val togglePendingIntent = buildActionPendingIntent(ACTION_TOGGLE, 2)
         val nextPendingIntent = buildActionPendingIntent(ACTION_NEXT, 3)
@@ -263,17 +214,10 @@ class MediaForegroundService : Service() {
             .build()
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d("SpotiLIE", "Task removed — stopping service")
-        super.onTaskRemoved(rootIntent)
-        stopSelf()
-    }
-
     override fun onDestroy() {
         Log.d("SpotiLIE", "SERVICE_ON_DESTROY")
         mediaSession?.release()
         wakeLock?.let { if (it.isHeld) it.release() }
-        try { unregisterReceiver(notificationActionReceiver) } catch (e: Exception) {}
         try { unregisterReceiver(noisyAudioReceiver) } catch (e: Exception) {}
         try { unregisterReceiver(bluetoothDisconnectReceiver) } catch (e: Exception) {}
         

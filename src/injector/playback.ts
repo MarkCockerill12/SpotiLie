@@ -143,7 +143,7 @@ function initMediaActionBridge() {
         audio?.play().catch(() => {});
       }
     } else if (action === 'pause') {
-      const clicked = clickSpotifyButton([
+      clickSpotifyButton([
         'button[data-testid="control-button-playpause"]',
         'button[aria-label*="Pause" i]'
       ]);
@@ -219,33 +219,6 @@ function initNativeMessageListener() {
     console.log('SpotiLIE: Native message listener active');
   } catch (e) {
     console.warn('SpotiLIE: Could not set up native message listener', e);
-  }
-}
-
-/**
- * JS-side Bluetooth disconnect guard.
- * Backup for the Kotlin BroadcastReceiver in MediaForegroundService.
- * Fires when audio output device changes (e.g. headphones disconnected).
- */
-function initBluetoothPauseGuard() {
-  try {
-    if (!navigator.mediaDevices?.addEventListener) return;
-
-    navigator.mediaDevices.addEventListener('devicechange', () => {
-      // Small delay to let the system settle before checking state
-      setTimeout(() => {
-        // Only pause if we were actually playing
-        const pauseBtn = document.querySelector(
-          'button[data-testid="control-button-playpause"][aria-label="Pause"]'
-        ) as HTMLElement | null;
-        if (pauseBtn) {
-          console.log('SpotiLIE: Audio device disconnected — pausing playback');
-          pauseBtn.click();
-        }
-      }, 400);
-    });
-  } catch (e) {
-    console.warn('SpotiLIE: Could not set up Bluetooth pause guard', e);
   }
 }
 

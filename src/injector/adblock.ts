@@ -239,7 +239,7 @@ export function initAdblock() {
     const originalXHRSend = XMLHttpRequest.prototype.send;
     const originalXHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
 
-    XMLHttpRequest.prototype.setRequestHeader = function(header: string, value: string) {
+    XMLHttpRequest.prototype.setRequestHeader = function(header: string, _value: string) {
       if (header && header.toLowerCase() === 'x-cache-hint') {
         return;
       }
@@ -258,7 +258,7 @@ export function initAdblock() {
     // ── Layer 2c: Worker & sendBeacon interception ────────────────────
     const originalSendBeacon = navigator.sendBeacon;
     if (originalSendBeacon) {
-      navigator.sendBeacon = function(url: string | URL, data?: BodyInit | null) {
+      navigator.sendBeacon = function(url: string | URL, _data?: BodyInit | null) {
         if (isAdUrl(url.toString())) return true;
         return originalSendBeacon.apply(this, arguments as any);
       };

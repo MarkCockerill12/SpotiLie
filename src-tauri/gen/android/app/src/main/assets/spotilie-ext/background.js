@@ -10,7 +10,7 @@
  *     injector.js ──runtime.sendMessage──▶ background.js ──port.postMessage──▶ MainActivity
  */
 
-const PORT_NAME = "spotilie-native-bridge";
+const PORT_NAME = "spotilie_native_bridge";
 
 let nativePort = null;
 

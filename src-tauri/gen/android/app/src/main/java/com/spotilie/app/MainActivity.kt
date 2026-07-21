@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
         private const val EXT_ID = "spotilie@local"
         private const val EXT_PATH = "resource://android/assets/spotilie-ext/"
         // Port name must match the one used in the extension's background/content script
-        private const val PORT_NAME = "spotilie-native-bridge"
+        private const val PORT_NAME = "spotilie_native_bridge"
     }
 
     private var geckoView: GeckoView? = null
@@ -123,16 +123,23 @@ class MainActivity : AppCompatActivity() {
                                                     val title = json.optString("title", "SpotiLIE")
                                                     val artist = json.optString("artist", "Playing")
                                                     val isPlaying = json.optBoolean("isPlaying", false)
-                                                    val intent = android.content.Intent(
-                                                        MediaForegroundService.ACTION_UPDATE_MEDIA
-                                                    ).apply {
-                                                        setPackage(packageName)
+                                                    
+                                                    val serviceIntent = Intent(this@MainActivity, MediaForegroundService::class.java).apply {
+                                                        action = MediaForegroundService.ACTION_UPDATE_MEDIA
                                                         putExtra("title", title)
                                                         putExtra("artist", artist)
                                                         putExtra("isPlaying", isPlaying)
                                                     }
-                                                    sendBroadcast(intent)
-                                                    Log.d(TAG, "Metadata dispatched: $title – $artist playing=$isPlaying")
+                                                    try {
+                                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                                            startForegroundService(serviceIntent)
+                                                        } else {
+                                                            startService(serviceIntent)
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Log.w(TAG, "Could not start MediaForegroundService: ${e.message}")
+                                                    }
+                                                    Log.d(TAG, "Metadata dispatched to service: $title – $artist playing=$isPlaying")
                                                 }
                                             } catch (e: Exception) {
                                                 Log.w(TAG, "Failed to parse port message: ${e.message}")

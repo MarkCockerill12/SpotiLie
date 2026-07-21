@@ -58,7 +58,7 @@ export function initHardwareSpoofing() {
           ],
           mobile: false,
           platform: 'Windows',
-          getHighEntropyValues: async (hints: string[]) => ({
+          getHighEntropyValues: async (_hints: string[]) => ({
             brands: [
               { brand: 'Not-A.Brand', version: '99' },
               { brand: 'Chromium', version: '124' },

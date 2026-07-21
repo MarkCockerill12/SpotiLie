@@ -83,9 +83,9 @@ export function initCMPStub() {
       const origAddEventListener = window.addEventListener;
       window.addEventListener = function(type: string, listener: any, options?: any) {
         if (type === 'message' && typeof listener === 'function') {
-          const wrappedListener = function(this: any, event: MessageEvent) {
+          const wrappedListener: any = function(this: any, event: any) {
             try {
-              if (event && !event.source) {
+              if (event && typeof event === 'object' && 'source' in event) {
                 try {
                   Object.defineProperty(event, 'source', { get: () => fakeCmpWindow, configurable: true });
                 } catch (_) {}
@@ -127,7 +127,7 @@ export function initCMPStub() {
 
     // TCF v2 __tcfapi stub
     if (!(window as any).__tcfapi) {
-      const tcfStub: any = function(cmd: string, version: number, callback: any) {
+      const tcfStub: any = function(_cmd: string, _version: number, callback: any) {
         if (typeof callback === 'function') {
           try {
             callback({
