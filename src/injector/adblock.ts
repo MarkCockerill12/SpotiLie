@@ -406,13 +406,14 @@ function initAudioAdGuard() {
   let lastAdSkipTime = 0;
 
   const AD_TITLE_PATTERNS = [
-    /advertisement/i,
-    /anuncio/i,
-    /anzeige/i,
-    /publicit/i,
-    /sponsor/i,
-    /commercial/i,
-    /^ad\s*[-–—]/i,
+    /\badvertisement\b/i,
+    /\banuncio\b/i,
+    /\banzeige\b/i,
+    /\bpublicité\b/i,
+    /\bpublicite\b/i,
+    /\bsponsored\b/i,
+    /\bspotify premium\b/i,
+    /\bcommercial\b/i,
   ];
 
   const isAdPlaying = (): boolean => {

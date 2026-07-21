@@ -284,9 +284,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "MainActivity onDestroy — stopping session and service")
         extensionPort = null
+        try { geckoSession?.stop() } catch (_: Exception) {}
+        try { geckoSession?.close() } catch (_: Exception) {}
         stopService(Intent(this, MediaForegroundService::class.java))
-        geckoSession?.close()
         geckoView = null
         geckoSession = null
         instance = null

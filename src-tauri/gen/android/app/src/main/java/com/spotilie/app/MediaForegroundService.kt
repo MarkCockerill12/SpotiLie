@@ -221,19 +221,20 @@ class MediaForegroundService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d("SpotiLIE", "Task removed — stopping service and clearing notification")
+        Log.d("SpotiLIE", "Task removed — stopping playback and killing process")
         super.onTaskRemoved(rootIntent)
+        try {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel(1)
+        } catch (_: Exception) {}
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
-        try {
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.cancel(1)
-        } catch (_: Exception) {}
         stopSelf()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onDestroy() {
