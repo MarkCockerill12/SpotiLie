@@ -98,6 +98,16 @@ function makeSafeResponse(url: string): Response {
   return new Response('{}', { status: 200, headers });
 }
 
+function stripAdFields(obj: any) {
+  if (!obj || typeof obj !== 'object') return;
+  if (obj.isAd !== undefined) obj.isAd = false;
+  if (obj.is_advertisement !== undefined) obj.is_advertisement = 'false';
+  if (obj.adBreak !== undefined) obj.adBreak = null;
+  if (obj.ad_id !== undefined) delete obj.ad_id;
+  if (obj.ad_type !== undefined) delete obj.ad_type;
+  if (obj.advertisement !== undefined) delete obj.advertisement;
+}
+
 function spoofPremium(data: any): any {
   if (!data || typeof data !== 'object') return data;
 
@@ -126,6 +136,19 @@ function spoofPremium(data: any): any {
     data.advancement.advancement_mode = 'NORMAL';
     data.advancement.advancement_disabled = false;
     data.advancement.skips_remaining = 999;
+  }
+
+  // ── Strip ad flags from player state & track queues ───────────────
+  stripAdFields(data.track);
+  stripAdFields(data.item);
+  stripAdFields(data.current_track);
+  stripAdFields(data.context_track);
+
+  if (Array.isArray(data.next_tracks)) {
+    data.next_tracks.forEach(stripAdFields);
+  }
+  if (Array.isArray(data.prev_tracks)) {
+    data.prev_tracks.forEach(stripAdFields);
   }
 
   return data;
