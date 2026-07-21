@@ -11,6 +11,8 @@
 - **Pre-requisite:** If `src/injector.js` or Rust code changes, you must run `cargo tauri build --target aarch64-linux-android` before running the build script to ensure the native library is updated.
 
 ## UI & Injection
-
 - **Injector Logic:** The app uses `src/injector.ts` (compiled to `src/injector.js`) to modify the Spotify Web Player.
 - **Mobile UI:** We force a Desktop User-Agent to unlock premium features but use injected CSS in `injector.ts` to make the UI mobile-friendly.
+
+## Thinking Style
+- **Caveman Thinking:** ALWAYS use telegraphed/caveman-style English for ALL internal thinking and reasoning (omit filler words, use short concise phrases). Never compromise on reasoning depth, technical detail, or logical accuracy.
