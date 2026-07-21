@@ -59,6 +59,14 @@ class MediaForegroundService : Service() {
             isActive = true
         }
 
+        // REQUIRED on Android 12+: Call startForeground in onCreate to prevent ForegroundServiceDidNotStartInTimeException
+        val notification = createNotification("SpotiLIE", "Ready", false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(1, notification)
+        }
+
         // Register headphone/bluetooth disconnect receiver
         val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -186,7 +194,7 @@ class MediaForegroundService : Service() {
         val playPauseIcon = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play
         val playPauseLabel = if (isPlaying) "Pause" else "Play"
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(artist)
             .setSmallIcon(android.R.drawable.stat_sys_headset)
@@ -195,13 +203,21 @@ class MediaForegroundService : Service() {
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .addAction(R.drawable.ic_skip_previous, "Previous", prevPendingIntent)
             .addAction(playPauseIcon, playPauseLabel, togglePendingIntent)
             .addAction(R.drawable.ic_skip_next, "Next", nextPendingIntent)
             .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
                 .setMediaSession(mediaSession?.sessionToken)
                 .setShowActionsInCompactView(0, 1, 2))
-            .build()
+
+        val notification = builder.build()
+        if (isPlaying) {
+            notification.flags = notification.flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR
+        } else {
+            notification.flags = notification.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR).inv()
+        }
+        return notification
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

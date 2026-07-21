@@ -380,6 +380,7 @@ function initAudioAdGuard() {
   let adActive = false;
   let skipAttempts = 0;
   let skipTimer: ReturnType<typeof setInterval> | null = null;
+  let lastAdSkipTime = 0;
 
   const AD_TITLE_PATTERNS = [
     /advertisement/i,
@@ -397,31 +398,23 @@ function initAudioAdGuard() {
     // Check 1: Audio src URL explicitly mentions ad
     if (audio?.src && (audio.src.includes('audio-ads') || audio.src.includes('ad-logic') || audio.src.includes('/ad/'))) return true;
 
-    // Check 2: Short audio clip (<31s) without a valid artist link is almost always an audio ad
-    if (audio && isFinite(audio.duration) && audio.duration > 0 && audio.duration <= 31) {
-      const artistLink = document.querySelector(
-        '[data-testid="context-item-info-subtitles"] a[href*="/artist/"], [data-testid="now-playing-widget"] a[href*="/artist/"]'
-      );
-      if (!artistLink) return true;
-    }
-
-    // Check 3: Document title
+    // Check 2: Document title matching ad keywords
     const title = (document.title || '').trim();
-    if (AD_TITLE_PATTERNS.some(p => p.test(title))) return true;
+    if (title && AD_TITLE_PATTERNS.some(p => p.test(title))) return true;
 
-    // Check 4: Ad indicator elements in DOM
+    // Check 3: Explicit Ad indicator elements anywhere in DOM
     if (document.querySelector('[data-testid="ad-indicator"], [data-testid="ad-sponsor-container"], .Root__ads-container, [class*="ad-overlay"], [class*="video-ad"], [class*="ad-slot"]')) return true;
 
-    // Check 5: Now-playing widget text
+    // Check 4: Now-playing title text matching ad keywords
     const nowPlayingTitle = document.querySelector(
       '[data-testid="context-item-info-title"], [data-testid="now-playing-widget"] [data-testid="context-item-link"]'
     );
     if (nowPlayingTitle) {
       const text = (nowPlayingTitle.textContent || '').toLowerCase().trim();
-      if (AD_TITLE_PATTERNS.some(p => p.test(text))) return true;
+      if (text && AD_TITLE_PATTERNS.some(p => p.test(text))) return true;
     }
 
-    // Check 6: Track link explicitly pointing to /ad/
+    // Check 5: Track link explicitly pointing to /ad/
     const trackLink = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-bar"] a');
     if (trackLink) {
       const href = trackLink.getAttribute('href') || '';
@@ -448,6 +441,10 @@ function initAudioAdGuard() {
   };
 
   const trySkipAd = (): boolean => {
+    const now = Date.now();
+    if (now - lastAdSkipTime < 800) return false;
+    lastAdSkipTime = now;
+
     muteAllAudio();
 
     // Strategy A: Instantly end audio stream by seeking to end and dispatching ended event
