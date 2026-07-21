@@ -79,6 +79,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Monitor network state — re-send layout & state when connection is restored
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            cm?.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    Log.d(TAG, "Network available — re-sending nav height and state")
+                    sendNavHeight()
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register NetworkCallback: ${e.message}")
+        }
+
         // Start the foreground media service for notification + BT controls
         startService(Intent(this, MediaForegroundService::class.java))
 

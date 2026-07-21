@@ -15,7 +15,32 @@ export function initPlaybackHooks() {
   initNativeMessageListener();
   initBluetoothPauseGuard();
   initMobileTrackClick();
+  initNetworkRobustness();
   initStorageWipe();
+}
+
+/** Auto-recover playback and stream connections when network drops or reconnects */
+function initNetworkRobustness() {
+  window.addEventListener('online', () => {
+    console.log('SpotiLIE: Network connection restored — resuming audio');
+    setTimeout(() => {
+      const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
+      if (audio && audio.paused) {
+        (window as any).spotilieMediaAction?.('play');
+      }
+    }, 1000);
+  });
+
+  window.addEventListener('error', (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (target?.tagName === 'AUDIO' || target?.tagName === 'VIDEO') {
+      console.warn('SpotiLIE: HTMLMediaElement error — retrying playback');
+      setTimeout(() => {
+        const playBtn = document.querySelector('button[data-testid="control-button-playpause"]') as HTMLElement | null;
+        if (playBtn) playBtn.click();
+      }, 1500);
+    }
+  }, true);
 }
 
 /** Diagnostic logger for HTMLMediaElement errors and play() rejections */

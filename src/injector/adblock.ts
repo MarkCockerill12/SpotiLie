@@ -373,38 +373,41 @@ function initAudioAdGuard() {
   let skipTimer: ReturnType<typeof setInterval> | null = null;
 
   const AD_TITLE_PATTERNS = [
-    /^advertisement/i,
+    /advertisement/i,
+    /anuncio/i,
+    /anzeige/i,
+    /publicit/i,
+    /sponsor/i,
+    /commercial/i,
     /^ad\s*[-–—]/i,
-    /sponsored/i,
   ];
 
   const isAdPlaying = (): boolean => {
-    // Check 1: Document title
+    // Check 1: Audio src URL
+    const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
+    if (audio?.src && (audio.src.includes('audio-ads') || audio.src.includes('ad-logic'))) return true;
+
+    // Check 2: Document title
     const title = (document.title || '').trim();
     if (AD_TITLE_PATTERNS.some(p => p.test(title))) return true;
 
-    // Check 2: Ad indicator elements in DOM
-    if (document.querySelector('[data-testid="ad-indicator"]')) return true;
-    if (document.querySelector('[data-testid="ad-sponsor-container"]')) return true;
+    // Check 3: Ad indicator elements in DOM
+    if (document.querySelector('[data-testid="ad-indicator"], [data-testid="ad-sponsor-container"], .Root__ads-container, [class*="ad-overlay"]')) return true;
 
-    // Check 3: Now-playing widget text
+    // Check 4: Now-playing widget text
     const nowPlayingTitle = document.querySelector(
       '[data-testid="context-item-info-title"], [data-testid="now-playing-widget"] [data-testid="context-item-link"]'
     );
     if (nowPlayingTitle) {
       const text = (nowPlayingTitle.textContent || '').toLowerCase().trim();
-      if (text === 'advertisement' || text.startsWith('advertisement')) return true;
+      if (AD_TITLE_PATTERNS.some(p => p.test(text))) return true;
     }
 
-    // Check 4: Any visible ad overlay
-    const adOverlay = document.querySelector('.Root__ads-container, [class*="ad-overlay"], [class*="video-ad"]');
-    if (adOverlay && (adOverlay as HTMLElement).offsetParent !== null) return true;
-
-    // Check 5: Track link explicitly pointing to /ad/ or /advertisement/
-    const trackLink = document.querySelector('[data-testid="context-item-link"]');
+    // Check 5: Track link explicitly pointing to /ad/
+    const trackLink = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-bar"] a');
     if (trackLink) {
       const href = trackLink.getAttribute('href') || '';
-      if (href.startsWith('/ad/') || href.includes('advertisement')) return true;
+      if (href.includes('/ad/') || href.includes('advertisement')) return true;
     }
 
     return false;
@@ -412,39 +415,61 @@ function initAudioAdGuard() {
 
   const muteAllAudio = () => {
     document.querySelectorAll('audio, video').forEach(el => {
-      (el as HTMLMediaElement).muted = true;
-      try { (el as HTMLMediaElement).volume = 0; } catch (_) {}
+      const media = el as HTMLMediaElement;
+      media.muted = true;
+      try { media.volume = 0; } catch (_) {}
     });
   };
 
   const unmuteAllAudio = () => {
     document.querySelectorAll('audio, video').forEach(el => {
-      (el as HTMLMediaElement).muted = false;
-      try { (el as HTMLMediaElement).volume = 1; } catch (_) {}
+      const media = el as HTMLMediaElement;
+      media.muted = false;
+      try { media.volume = 1; } catch (_) {}
     });
   };
 
   const trySkipAd = (): boolean => {
+    muteAllAudio();
+
+    // Strategy A: Instantly end audio stream by seeking to end
+    const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
+    if (audio) {
+      try {
+        if (isFinite(audio.duration) && audio.duration > 0) {
+          audio.currentTime = audio.duration - 0.05;
+        } else {
+          audio.currentTime = 999999;
+        }
+      } catch (_) {}
+    }
+
+    // Strategy B: Force remove disabled attributes and click skip buttons
     const skipSelectors = [
       'button[data-testid="control-button-skip-forward"]',
-      'button[aria-label="Next"]',
-      'button[aria-label="Skip"]',
-      'button[aria-label="Skip ad"]',
+      'button[aria-label*="next" i]',
+      'button[aria-label*="skip" i]',
+      'button[aria-label*="siguiente" i]',
       '[data-testid="skip-ad-button"]',
     ];
+    let clicked = false;
     for (const sel of skipSelectors) {
-      const btn = document.querySelector(sel) as HTMLElement;
-      if (btn && !btn.hasAttribute('disabled')) {
-        btn.click();
-        console.log('SpotiLIE: Auto-skipped audio ad via', sel);
-        return true;
-      }
+      const btns = document.querySelectorAll(sel);
+      btns.forEach(btn => {
+        const htmlBtn = btn as HTMLButtonElement;
+        htmlBtn.removeAttribute('disabled');
+        htmlBtn.removeAttribute('aria-disabled');
+        try {
+          htmlBtn.click();
+          clicked = true;
+        } catch (_) {}
+      });
     }
-    return false;
+    return clicked;
   };
 
   const startAggressiveSkip = () => {
-    if (skipTimer) return; // already running
+    if (skipTimer) return;
     skipAttempts = 0;
     skipTimer = setInterval(() => {
       if (!adActive) {
@@ -455,26 +480,20 @@ function initAudioAdGuard() {
       muteAllAudio();
       trySkipAd();
       skipAttempts++;
-      if (skipAttempts > 60) {
+      if (skipAttempts > 50) {
         clearInterval(skipTimer!);
         skipTimer = null;
       }
     }, 100);
   };
 
-  /** Core ad-detected handler — mute instantly, then attack skip button */
   const onAdDetected = () => {
     if (adActive) return;
     adActive = true;
-    console.log('SpotiLIE: Audio ad detected — muting and attacking skip button');
+    console.log('SpotiLIE: Audio ad detected — muting and seeking to end');
     muteAllAudio();
-
-    // Fire rapid skip attempts — ad skip button often appears 100-600ms after ad start
-    if (!trySkipAd()) {
-      [50, 150, 300, 500, 800, 1200, 2000, 3000].forEach(t =>
-        setTimeout(trySkipAd, t)
-      );
-    }
+    trySkipAd();
+    [50, 150, 300, 500, 800, 1200].forEach(t => setTimeout(trySkipAd, t));
     startAggressiveSkip();
   };
 
@@ -491,7 +510,6 @@ function initAudioAdGuard() {
     else onAdEnded();
   };
 
-  // ── Strategy 1: MutationObserver on document.title (fastest, fires on track change)
   const titleEl = document.querySelector('title');
   if (titleEl) {
     new MutationObserver(checkAdState).observe(titleEl, {
@@ -499,7 +517,6 @@ function initAudioAdGuard() {
     });
   }
 
-  // ── Strategy 2: MutationObserver on now-playing bar (catches ad-indicator DOM node)
   const attachNowPlayingObserver = () => {
     const bar = document.querySelector('[data-testid="now-playing-bar"]') ||
                 document.querySelector('.Root__now-playing-bar');
@@ -514,15 +531,13 @@ function initAudioAdGuard() {
     new MutationObserver(() => attachNowPlayingObserver()).observe(document.body, { childList: true });
   }
 
-  // ── Strategy 3: audio 'play' event — fires the instant a new track starts
   document.addEventListener('play', (e) => {
     if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
-      setTimeout(checkAdState, 50);   // check after brief delay so title updates
+      setTimeout(checkAdState, 50);
       setTimeout(checkAdState, 250);
     }
   }, true);
 
-  // ── Strategy 4: Fast backup poll (500ms) — catches anything the above miss
-  setInterval(checkAdState, 500);
+  setInterval(checkAdState, 400);
 }
 
