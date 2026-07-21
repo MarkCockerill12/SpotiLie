@@ -166,8 +166,16 @@ export function initMetadataObserver() {
     });
   };
 
-  // ── Strategy 3: Polling fallback ─────────────────────────────────────
-  setInterval(debouncedUpdate, 3000);
+  // ── Strategy 3: Polling fallback + Audio Event Listeners ───────────────
+  setInterval(debouncedUpdate, 2000);
+
+  document.addEventListener('play', (e) => {
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') debouncedUpdate();
+  }, true);
+
+  document.addEventListener('pause', (e) => {
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') debouncedUpdate();
+  }, true);
 
   // Initialize and retry until DOM elements are available
   const tryInit = () => {

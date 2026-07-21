@@ -134,36 +134,30 @@ function initMediaActionBridge() {
     const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
 
     if (action === 'play') {
-      if (audio && audio.paused) audio.play().catch(() => {});
-      clickSpotifyButton([
-        '#sl-playpause',
-        'button[data-testid="control-button-playpause"][aria-label*="Play" i]',
+      const clicked = clickSpotifyButton([
         'button[data-testid="control-button-playpause"]',
         'button[aria-label*="Play" i]',
         'button[aria-label*="reproducir" i]'
       ]);
+      if (!clicked || (audio && audio.paused)) {
+        audio?.play().catch(() => {});
+      }
     } else if (action === 'pause') {
-      if (audio && !audio.paused) audio.pause();
-      clickSpotifyButton([
-        '#sl-playpause',
-        'button[data-testid="control-button-playpause"][aria-label*="Pause" i]',
+      const clicked = clickSpotifyButton([
         'button[data-testid="control-button-playpause"]',
         'button[aria-label*="Pause" i]'
       ]);
+      if (audio && !audio.paused) audio.pause();
     } else if (action === 'toggle') {
-      if (audio) {
+      const clicked = clickSpotifyButton([
+        'button[data-testid="control-button-playpause"]'
+      ]);
+      if (!clicked && audio) {
         if (audio.paused) audio.play().catch(() => {});
         else audio.pause();
       }
-      clickSpotifyButton([
-        '#sl-playpause',
-        'button[data-testid="control-button-playpause"]',
-        'button[aria-label*="Play" i]',
-        'button[aria-label*="Pause" i]'
-      ]);
     } else if (action === 'next') {
       clickSpotifyButton([
-        '#sl-next',
         'button[data-testid="control-button-skip-forward"]',
         'button[aria-label*="Next" i]',
         'button[aria-label*="Siguiente" i]',
@@ -171,13 +165,36 @@ function initMediaActionBridge() {
       ]);
     } else if (action === 'prev') {
       clickSpotifyButton([
-        '#sl-prev',
         'button[data-testid="control-button-skip-back"]',
         'button[aria-label*="Previous" i]',
         'button[aria-label*="Anterior" i]'
       ]);
     }
   };
+}
+
+/**
+ * JS-side Bluetooth disconnect guard.
+ * Backup for the Kotlin BroadcastReceiver in MediaForegroundService.
+ * Fires when audio output device changes (e.g. headphones disconnected).
+ */
+function initBluetoothPauseGuard() {
+  try {
+    if (!navigator.mediaDevices?.addEventListener) return;
+
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+      setTimeout(() => {
+        const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
+        if (audio && !audio.paused) {
+          console.log('SpotiLIE: Audio output device changed/disconnected — pausing playback');
+          audio.pause();
+          clickSpotifyButton(['button[data-testid="control-button-playpause"]']);
+        }
+      }, 250);
+    });
+  } catch (e) {
+    console.warn('SpotiLIE: Could not set up Bluetooth pause guard', e);
+  }
 }
 
 /**
