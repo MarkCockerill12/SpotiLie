@@ -103,24 +103,11 @@ class MediaForegroundService : Service() {
 
                 updateMetadata(title, artist, isPlaying)
 
-                if (isPlaying) {
-                    val notification = createNotification(title, artist, true)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-                    } else {
-                        startForeground(1, notification)
-                    }
+                val notification = createNotification(title, artist, isPlaying)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
                 } else {
-                    // Retain notification in drawer when paused (dismissible), detach from foreground pin
-                    val notification = createNotification(title, artist, false)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        stopForeground(false)
-                    }
-                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    notificationManager.notify(1, notification)
+                    startForeground(1, notification)
                 }
             }
         }

@@ -244,12 +244,26 @@ class MainActivity : AppCompatActivity() {
         val port = extensionPort ?: return
         runOnUiThread {
             try {
+                var hPx = navBarHeightCssPx
+                if (hPx < 36) {
+                    val rootInsets = window.decorView.rootWindowInsets
+                    if (rootInsets != null) {
+                        val insets = WindowInsetsCompat.toWindowInsetsCompat(rootInsets)
+                            .getInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.systemBars())
+                        val density = resources.displayMetrics.density
+                        if (insets.bottom > 0) {
+                            hPx = (insets.bottom / density).toInt()
+                            navBarHeightCssPx = hPx
+                        }
+                    }
+                }
+                val finalH = Math.max(hPx, 44)
                 val msg = JSONObject().apply {
                     put("type", "SET_NAV_HEIGHT")
-                    put("height", navBarHeightCssPx)
+                    put("height", finalH)
                 }
                 port.postMessage(msg)
-                Log.d(TAG, "Sent nav height: ${navBarHeightCssPx}px to extension")
+                Log.d(TAG, "Sent nav height: ${finalH}px to extension")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send nav height: ${e.message}")
             }

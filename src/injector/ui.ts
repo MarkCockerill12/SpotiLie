@@ -48,11 +48,11 @@ export function initUI() {
 function buildCSS(): string {
   return `
     :root {
-      --sys-nav-h:  0px;
+      --sys-nav-h:  44px;
       --app-nav-h:  ${APP_NAV_H}px;
       --player-h:   ${PLAYER_H}px;
       --top-bar-h:  ${TOP_H}px;
-      --bottom-h:   calc(var(--sys-nav-h) + var(--app-nav-h) + var(--player-h));
+      --bottom-h:   calc(var(--sys-nav-h) + var(--app-nav-h) + var(--player-h) + 6px);
     }
 
     html, body {

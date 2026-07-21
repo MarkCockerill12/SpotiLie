@@ -92,11 +92,10 @@ function makeSafeResponse(url: string): Response {
 function spoofPremium(data: any): any {
   if (!data || typeof data !== 'object') return data;
 
-  // Recursion guard — avoid infinite loops on circular refs
   if ((data as any).__spotilie_spoofed) return data;
   try { (data as any).__spotilie_spoofed = true; } catch (_) {}
 
-  // ── Direct field patches ──────────────────────────────────────────
+  // ── Account / Player product flags ──────────────────────────────────────────
   if (data.canPlayOnDemand !== undefined) data.canPlayOnDemand = true;
   if (data.is_premium !== undefined) data.is_premium = true;
   if (data.premium !== undefined && typeof data.premium === 'boolean') data.premium = true;
@@ -112,55 +111,12 @@ function spoofPremium(data: any): any {
     data.streaming_rules.max_skips_per_hour = 999;
   }
 
-  // ── Ad slot / break fields ────────────────────────────────────────
-  if (data.ads !== undefined && typeof data.ads === 'object' && !Array.isArray(data.ads)) {
-    data.ads = { speedy: null, audio: null, video: null, leaderboard: null, billboard: null };
-  }
-  if (Array.isArray(data.adSlots)) data.adSlots = [];
-  if (Array.isArray(data.adBreaks)) data.adBreaks = [];
-  if (Array.isArray(data.adInfos)) data.adInfos = [];
-  if (data.ad !== undefined && typeof data.ad === 'object') data.ad = null;
-  if (data.advertisement !== undefined) delete data.advertisement;
-
-  // ── Track / episode / item level ad fields ────────────────────────
-  const stripAds = (obj: any) => {
-    if (!obj || typeof obj !== 'object') return;
-    if (obj.advertisement !== undefined) delete obj.advertisement;
-    if (obj.isAd !== undefined) obj.isAd = false;
-    if (obj.adBreak !== undefined) obj.adBreak = null;
-  };
-  stripAds(data.track);
-  stripAds(data.episode);
-  stripAds(data.item);
-
   // ── Skip limits ───────────────────────────────────────────────────
   if (data.skips_remaining !== undefined) data.skips_remaining = 999;
   if (data.advancement) {
     data.advancement.advancement_mode = 'NORMAL';
     data.advancement.advancement_disabled = false;
     data.advancement.skips_remaining = 999;
-  }
-
-  // ── Arrays: items / tracks / episodes ────────────────────────────
-  const patchArray = (arr: any[]) => {
-    arr.forEach((item: any) => {
-      if (!item || typeof item !== 'object') return;
-      stripAds(item);
-      stripAds(item.track);
-      stripAds(item.episode);
-      // Handle GraphQL track wrapper {track: {track: {...}}}
-      if (item.track?.track) stripAds(item.track.track);
-    });
-  };
-  if (Array.isArray(data.items)) patchArray(data.items);
-  if (Array.isArray(data.tracks?.items)) patchArray(data.tracks.items);
-  if (Array.isArray(data.episodes?.items)) patchArray(data.episodes.items);
-
-  // ── GraphQL pageInfo / edges / nodes ─────────────────────────────
-  if (Array.isArray(data.edges)) {
-    data.edges.forEach((edge: any) => {
-      if (edge?.node) stripAds(edge.node);
-    });
   }
 
   return data;
