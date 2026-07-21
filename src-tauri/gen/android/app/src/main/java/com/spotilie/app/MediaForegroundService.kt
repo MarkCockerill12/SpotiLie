@@ -111,13 +111,16 @@ class MediaForegroundService : Service() {
                         startForeground(1, notification)
                     }
                 } else {
-                    // Only show notification when music IS playing
+                    // Retain notification in drawer when paused (dismissible), detach from foreground pin
+                    val notification = createNotification(title, artist, false)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopForeground(STOP_FOREGROUND_DETACH)
                     } else {
                         @Suppress("DEPRECATION")
-                        stopForeground(true)
+                        stopForeground(false)
                     }
+                    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    notificationManager.notify(1, notification)
                 }
             }
         }
@@ -212,6 +215,22 @@ class MediaForegroundService : Service() {
                 .setMediaSession(mediaSession?.sessionToken)
                 .setShowActionsInCompactView(0, 1, 2))
             .build()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.d("SpotiLIE", "Task removed — stopping service and clearing notification")
+        super.onTaskRemoved(rootIntent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        try {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel(1)
+        } catch (_: Exception) {}
+        stopSelf()
     }
 
     override fun onDestroy() {

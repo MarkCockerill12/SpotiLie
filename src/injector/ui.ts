@@ -411,7 +411,7 @@ function buildCSS(): string {
        ═══════════════════════════════════════════════════════════════════════ */
     #spotilie-bottom-nav {
       position: fixed !important;
-      bottom: var(--sys-nav-h) !important;
+      bottom: calc(var(--sys-nav-h) + 6px) !important;
       left: 0 !important;
       right: 0 !important;
       height: var(--app-nav-h) !important;
@@ -493,10 +493,10 @@ function initNavHeightListener() {
       const h = Math.max(0, msg.height);
       document.documentElement.style.setProperty('--sys-nav-h', `${h}px`);
       document.documentElement.style.setProperty(
-        '--bottom-h', `${h + APP_NAV_H + PLAYER_H}px`
+        '--bottom-h', `${h + APP_NAV_H + PLAYER_H + 6}px`
       );
       const nav = document.getElementById('spotilie-bottom-nav');
-      if (nav) nav.style.setProperty('bottom', `${h}px`, 'important');
+      if (nav) nav.style.setProperty('bottom', `calc(${h}px + 6px)`, 'important');
       console.log(`SpotiLIE: Nav height set to ${h}px CSS from Kotlin`);
     }
   });

@@ -55,10 +55,11 @@ class MainActivity : AppCompatActivity() {
 
         // Measure Android navigation bar height for CSS layout injection
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
-            val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.systemBars())
             val density = resources.displayMetrics.density
+            val bottomPx = Math.max(navInsets.bottom, (28 * density).toInt())
             // Convert physical pixels → CSS logical pixels
-            navBarHeightCssPx = (navInsets.bottom / density).toInt()
+            navBarHeightCssPx = (bottomPx / density).toInt()
             Log.d(TAG, "Nav bar height: ${navInsets.bottom}px physical → ${navBarHeightCssPx}px CSS")
             // If port already connected, push the height immediately
             sendNavHeight()
