@@ -401,9 +401,6 @@ function initDomAdPurger() {
  */
 function initAudioAdGuard() {
   let adActive = false;
-  let skipAttempts = 0;
-  let skipTimer: ReturnType<typeof setInterval> | null = null;
-  let lastAdSkipTime = 0;
 
   const AD_TITLE_PATTERNS = [
     /\badvertisement\b/i,
@@ -464,14 +461,9 @@ function initAudioAdGuard() {
     });
   };
 
-  const trySkipAd = (): boolean => {
-    const now = Date.now();
-    if (now - lastAdSkipTime < 800) return false;
-    lastAdSkipTime = now;
-
+  const skipCurrentAd = () => {
     muteAllAudio();
 
-    // Strategy A: Instantly end audio stream by seeking to end and dispatching ended event
     const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
     if (audio) {
       try {
@@ -484,7 +476,6 @@ function initAudioAdGuard() {
       } catch (_) {}
     }
 
-    // Strategy B: Force remove disabled attributes and click skip buttons
     const skipSelectors = [
       'button[data-testid="control-button-skip-forward"]',
       'button[aria-label*="next" i]',
@@ -492,62 +483,31 @@ function initAudioAdGuard() {
       'button[aria-label*="siguiente" i]',
       '[data-testid="skip-ad-button"]',
     ];
-    let clicked = false;
     for (const sel of skipSelectors) {
       const btns = document.querySelectorAll(sel);
       btns.forEach(btn => {
         const htmlBtn = btn as HTMLButtonElement;
         htmlBtn.removeAttribute('disabled');
         htmlBtn.removeAttribute('aria-disabled');
-        try {
-          htmlBtn.click();
-          clicked = true;
-        } catch (_) {}
+        try { htmlBtn.click(); } catch (_) {}
       });
     }
-    return clicked;
-  };
-
-  const startAggressiveSkip = () => {
-    if (skipTimer) return;
-    skipAttempts = 0;
-    skipTimer = setInterval(() => {
-      if (!adActive) {
-        clearInterval(skipTimer!);
-        skipTimer = null;
-        return;
-      }
-      muteAllAudio();
-      trySkipAd();
-      skipAttempts++;
-      if (skipAttempts > 50) {
-        clearInterval(skipTimer!);
-        skipTimer = null;
-      }
-    }, 50);
-  };
-
-  const onAdDetected = () => {
-    if (adActive) return;
-    adActive = true;
-    console.log('SpotiLIE: Audio ad detected — muting and seeking to end');
-    muteAllAudio();
-    trySkipAd();
-    [20, 50, 100, 200, 400, 800].forEach(t => setTimeout(trySkipAd, t));
-    startAggressiveSkip();
-  };
-
-  const onAdEnded = () => {
-    if (!adActive) return;
-    adActive = false;
-    if (skipTimer) { clearInterval(skipTimer); skipTimer = null; }
-    console.log('SpotiLIE: Audio ad ended — restoring audio');
-    unmuteAllAudio();
   };
 
   const checkAdState = () => {
-    if (isAdPlaying()) onAdDetected();
-    else onAdEnded();
+    if (isAdPlaying()) {
+      if (!adActive) {
+        adActive = true;
+        console.log('SpotiLIE: Audio ad detected — skipping');
+      }
+      skipCurrentAd();
+    } else {
+      if (adActive) {
+        adActive = false;
+        console.log('SpotiLIE: Ad ended — restoring audio');
+        unmuteAllAudio();
+      }
+    }
   };
 
   const titleEl = document.querySelector('title');
@@ -572,25 +532,13 @@ function initAudioAdGuard() {
   }
 
   document.addEventListener('loadedmetadata', (e) => {
-    if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
-      setTimeout(checkAdState, 10);
-      setTimeout(checkAdState, 100);
-    }
-  }, true);
-
-  document.addEventListener('timeupdate', (e) => {
-    if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
-      if (isAdPlaying()) onAdDetected();
-    }
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') checkAdState();
   }, true);
 
   document.addEventListener('play', (e) => {
-    if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
-      setTimeout(checkAdState, 10);
-      setTimeout(checkAdState, 100);
-    }
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') checkAdState();
   }, true);
 
-  setInterval(checkAdState, 250);
+  setInterval(checkAdState, 500);
 }
 
