@@ -1,5 +1,9 @@
 # SpotiLIE Project Instructions
 
+## Permanent Context
+- **Location:** `C:/Users/Mark/Desktop/New folder/Coding/AiContext/SpotiLIE/`
+- **Source of Truth:** `ULTIMATE_CONTEXT.md`
+
 ## Workflow & Deployment
 
 - **Automatic Deployment:** Every code change or fix MUST be followed by a full build and deployment to the connected Android device.

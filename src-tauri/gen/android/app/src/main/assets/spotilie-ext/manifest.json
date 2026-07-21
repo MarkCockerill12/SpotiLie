@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "SpotiLIE",
+  "version": "2.1",
+  "description": "SpotiLIE Engine Injector",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "spotilie@local"
+    }
+  },
+  "permissions": [
+    "geckoViewAddons",
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "tabs",
+    "https://open.spotify.com/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["injector.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

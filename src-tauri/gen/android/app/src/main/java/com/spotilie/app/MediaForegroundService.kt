@@ -1,6 +1,7 @@
 package com.spotilie.app
 
 import android.app.*
+import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -29,10 +30,9 @@ class MediaForegroundService : Service() {
             Log.d("SpotiLIE", "Notification action received: $action")
             when (action) {
                 ACTION_UPDATE_MEDIA -> {
-                    // Metadata update from Rust/JNI via sendBroadcast
-                    val title = intent?.getStringExtra("title") ?: "SpotiLIE"
-                    val artist = intent?.getStringExtra("artist") ?: "Active"
-                    val isPlaying = intent?.getBooleanExtra("isPlaying", false) ?: false
+                    val title = intent.getStringExtra("title") ?: "SpotiLIE"
+                    val artist = intent.getStringExtra("artist") ?: "Active"
+                    val isPlaying = intent.getBooleanExtra("isPlaying", false)
                     currentIsPlaying = isPlaying
                     updateMetadata(title, artist, isPlaying)
                     val notification = createNotification(title, artist, isPlaying)
@@ -42,25 +42,25 @@ class MediaForegroundService : Service() {
                         startForeground(1, notification)
                     }
                 }
-                ACTION_PLAY -> {
+                ACTION_PLAY  -> {
                     mediaSession?.controller?.transportControls?.play()
+                    MainActivity.instance?.handleMediaAction("play")
                 }
                 ACTION_PAUSE -> {
                     mediaSession?.controller?.transportControls?.pause()
+                    MainActivity.instance?.handleMediaAction("pause")
                 }
-                ACTION_NEXT -> {
+                ACTION_NEXT  -> {
                     mediaSession?.controller?.transportControls?.skipToNext()
+                    MainActivity.instance?.handleMediaAction("next")
                 }
-                ACTION_PREV -> {
+                ACTION_PREV  -> {
                     mediaSession?.controller?.transportControls?.skipToPrevious()
+                    MainActivity.instance?.handleMediaAction("prev")
                 }
                 ACTION_TOGGLE -> {
-                    // Toggle: if playing → pause, else play
-                    if (currentIsPlaying) {
-                        mediaSession?.controller?.transportControls?.pause()
-                    } else {
-                        mediaSession?.controller?.transportControls?.play()
-                    }
+                    val act = if (currentIsPlaying) "pause" else "play"
+                    MainActivity.instance?.handleMediaAction(act)
                 }
             }
         }
@@ -70,7 +70,17 @@ class MediaForegroundService : Service() {
     private val noisyAudioReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                Log.d("SpotiLIE", "Audio becoming noisy (headphone disconnect) — pausing")
+                Log.d("SpotiLIE", "Audio becoming noisy — pausing")
+                MainActivity.instance?.handleMediaAction("pause")
+            }
+        }
+    }
+
+    // ── BroadcastReceiver: Bluetooth ACL disconnect (backup) ─────────
+    private val bluetoothDisconnectReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothDevice.ACTION_ACL_DISCONNECTED) {
+                Log.d("SpotiLIE", "Bluetooth ACL disconnected — pausing playback")
                 MainActivity.instance?.handleMediaAction("pause")
             }
         }
@@ -124,9 +134,23 @@ class MediaForegroundService : Service() {
             registerReceiver(noisyAudioReceiver, noisyFilter)
         }
 
+        // Register Bluetooth ACL disconnect receiver (backup for devices that don't
+        // properly trigger ACTION_AUDIO_BECOMING_NOISY, e.g. some TWS earbuds)
+        try {
+            val btFilter = IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(bluetoothDisconnectReceiver, btFilter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(bluetoothDisconnectReceiver, btFilter)
+            }
+        } catch (e: Exception) {
+            Log.w("SpotiLIE", "Could not register BT ACL receiver (permission may be missing): ${e.message}")
+        }
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SpotiLIE::BackgroundPlayback")
-        wakeLock?.acquire()
+        // 10-minute timeout as safety net — re-acquired on each metadata update
+        wakeLock?.acquire(10 * 60 * 1000L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -148,7 +172,15 @@ class MediaForegroundService : Service() {
         return START_STICKY
     }
 
+    private fun renewWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            it.acquire(10 * 60 * 1000L)
+        }
+    }
+
     private fun updateMetadata(title: String, artist: String, isPlaying: Boolean) {
+        renewWakeLock() // Keep CPU alive for continuous playback
         mediaSession?.let { session ->
             session.setMetadata(
                 MediaMetadataCompat.Builder()
@@ -231,11 +263,26 @@ class MediaForegroundService : Service() {
             .build()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.d("SpotiLIE", "Task removed — stopping service")
+        super.onTaskRemoved(rootIntent)
+        stopSelf()
+    }
+
     override fun onDestroy() {
+        Log.d("SpotiLIE", "SERVICE_ON_DESTROY")
         mediaSession?.release()
         wakeLock?.let { if (it.isHeld) it.release() }
         try { unregisterReceiver(notificationActionReceiver) } catch (e: Exception) {}
         try { unregisterReceiver(noisyAudioReceiver) } catch (e: Exception) {}
+        try { unregisterReceiver(bluetoothDisconnectReceiver) } catch (e: Exception) {}
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         super.onDestroy()
     }
 

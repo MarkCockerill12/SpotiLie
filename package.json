@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 192.168.0.56",
-    "build": "bun run tsc src/injector.ts --outFile src/injector.js --target ES2020 --lib ES2020,DOM --skipLibCheck && tsc && vite build",
+    "build": "bun build src/injector/index.ts --outfile src/injector.js --minify && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

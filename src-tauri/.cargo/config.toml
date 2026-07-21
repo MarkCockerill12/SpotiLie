@@ -1,0 +1,4 @@
+[target.aarch64-linux-android]
+# Android 15+ requires 16KB page-aligned shared libraries.
+# This flag tells the linker to use 16KB page size instead of the default 4KB.
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
