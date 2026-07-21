@@ -18,8 +18,17 @@
 const AD_PATTERNS: string[] = [
   // Spotify pure-ad endpoints
   '/ad-logic/',
+  '/ads/',
+  '/ad-service/',
+  '/commercial/',
   'spclient.wg.spotify.com/ads',
   'spclient.wg.spotify.com/ad-logic',
+  'spclient.wg.spotify.com/commercial',
+  'spclient.wg.spotify.com/sponsored',
+  'spclient.wg.spotify.com/rewarded',
+  'spclient.wg.spotify.com/v1/ads',
+  'spclient.wg.spotify.com/ad-service',
+  'spclient.wg.spotify.com/adbreak',
   'api.spotify.com/v1/ads',
   'audio-ads.spotify.com',
   'adeventtracker.spotify.com',
@@ -383,18 +392,27 @@ function initAudioAdGuard() {
   ];
 
   const isAdPlaying = (): boolean => {
-    // Check 1: Audio src URL
     const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
-    if (audio?.src && (audio.src.includes('audio-ads') || audio.src.includes('ad-logic'))) return true;
 
-    // Check 2: Document title
+    // Check 1: Audio src URL explicitly mentions ad
+    if (audio?.src && (audio.src.includes('audio-ads') || audio.src.includes('ad-logic') || audio.src.includes('/ad/'))) return true;
+
+    // Check 2: Short audio clip (<31s) without a valid artist link is almost always an audio ad
+    if (audio && isFinite(audio.duration) && audio.duration > 0 && audio.duration <= 31) {
+      const artistLink = document.querySelector(
+        '[data-testid="context-item-info-subtitles"] a[href*="/artist/"], [data-testid="now-playing-widget"] a[href*="/artist/"]'
+      );
+      if (!artistLink) return true;
+    }
+
+    // Check 3: Document title
     const title = (document.title || '').trim();
     if (AD_TITLE_PATTERNS.some(p => p.test(title))) return true;
 
-    // Check 3: Ad indicator elements in DOM
-    if (document.querySelector('[data-testid="ad-indicator"], [data-testid="ad-sponsor-container"], .Root__ads-container, [class*="ad-overlay"]')) return true;
+    // Check 4: Ad indicator elements in DOM
+    if (document.querySelector('[data-testid="ad-indicator"], [data-testid="ad-sponsor-container"], .Root__ads-container, [class*="ad-overlay"], [class*="video-ad"], [class*="ad-slot"]')) return true;
 
-    // Check 4: Now-playing widget text
+    // Check 5: Now-playing widget text
     const nowPlayingTitle = document.querySelector(
       '[data-testid="context-item-info-title"], [data-testid="now-playing-widget"] [data-testid="context-item-link"]'
     );
@@ -403,7 +421,7 @@ function initAudioAdGuard() {
       if (AD_TITLE_PATTERNS.some(p => p.test(text))) return true;
     }
 
-    // Check 5: Track link explicitly pointing to /ad/
+    // Check 6: Track link explicitly pointing to /ad/
     const trackLink = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-bar"] a');
     if (trackLink) {
       const href = trackLink.getAttribute('href') || '';
@@ -432,15 +450,16 @@ function initAudioAdGuard() {
   const trySkipAd = (): boolean => {
     muteAllAudio();
 
-    // Strategy A: Instantly end audio stream by seeking to end
+    // Strategy A: Instantly end audio stream by seeking to end and dispatching ended event
     const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
     if (audio) {
       try {
         if (isFinite(audio.duration) && audio.duration > 0) {
-          audio.currentTime = audio.duration - 0.05;
+          audio.currentTime = audio.duration - 0.01;
         } else {
           audio.currentTime = 999999;
         }
+        audio.dispatchEvent(new Event('ended'));
       } catch (_) {}
     }
 
@@ -484,7 +503,7 @@ function initAudioAdGuard() {
         clearInterval(skipTimer!);
         skipTimer = null;
       }
-    }, 100);
+    }, 50);
   };
 
   const onAdDetected = () => {
@@ -493,7 +512,7 @@ function initAudioAdGuard() {
     console.log('SpotiLIE: Audio ad detected — muting and seeking to end');
     muteAllAudio();
     trySkipAd();
-    [50, 150, 300, 500, 800, 1200].forEach(t => setTimeout(trySkipAd, t));
+    [20, 50, 100, 200, 400, 800].forEach(t => setTimeout(trySkipAd, t));
     startAggressiveSkip();
   };
 
@@ -531,13 +550,26 @@ function initAudioAdGuard() {
     new MutationObserver(() => attachNowPlayingObserver()).observe(document.body, { childList: true });
   }
 
-  document.addEventListener('play', (e) => {
+  document.addEventListener('loadedmetadata', (e) => {
     if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
-      setTimeout(checkAdState, 50);
-      setTimeout(checkAdState, 250);
+      setTimeout(checkAdState, 10);
+      setTimeout(checkAdState, 100);
     }
   }, true);
 
-  setInterval(checkAdState, 400);
+  document.addEventListener('timeupdate', (e) => {
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
+      if (isAdPlaying()) onAdDetected();
+    }
+  }, true);
+
+  document.addEventListener('play', (e) => {
+    if ((e.target as HTMLElement)?.tagName === 'AUDIO') {
+      setTimeout(checkAdState, 10);
+      setTimeout(checkAdState, 100);
+    }
+  }, true);
+
+  setInterval(checkAdState, 250);
 }
 
