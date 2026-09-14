@@ -22,7 +22,10 @@ export function initPlayer() {
   initMetadataSync();
   initBootWatchdog();
   initPlaybackWatchdog();
-  initDebugHooks();
+  // Inline env test, not the imported DEBUG const: Bun only strips the branch (and
+  // with it the eval listener) when the comparison is at the call site. Guarding
+  // with `if (DEBUG)` shipped the listener in release bundles. See src/env.d.ts.
+  if (process.env.SPOTILIE_DEBUG === '1') initDebugHooks();
 }
 
 const PLAY_PAUSE = 'button[data-testid="control-button-playpause"]';
