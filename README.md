@@ -27,6 +27,12 @@ Connect, with ad handling, a real media notification, and background playback.
   that has stalled, and leaves the offline screen as soon as the network is back.
 - **Custom icon** — adaptive launcher icon with a themed (Android 13+) variant.
 
+## Download
+
+Grab the latest APK from **[Releases](https://github.com/MarkCockerill12/SpotiLie/releases/latest)**.
+Most phones want the `arm64-v8a` build; the `universal` build works on every supported
+device. Requires Android 8.0+.
+
 ## How it works
 
 ```
@@ -89,26 +95,3 @@ bun install
 
 On first launch the app asks for notification permission (needed for the media
 notification) and battery-optimisation exemption (recommended for background playback).
-
-## Things that will bite you
-
-**The user agent must not stay applied.** `open.spotify.com` serves different HTML to mobile
-and desktop agents, so the override has to be live for the top-level document request. But
-GeckoView sends it as an author header, which puts `user-agent` in every CORS preflight, and
-Spotify rejects that: metadata, playlists, artwork and the Widevine licence all fail at once.
-The override is set per navigation and cleared as soon as the page starts; the injector
-spoofs `navigator.userAgent` from then on.
-
-**Never let a Spotify-origin ad request fail.** Cancelling one, or answering it with an
-error, drops the player into an endless "Playback Paused" loop. Spotify's own ad endpoints
-get a real 200 whose body is replaced with `{}`; only third-party networks are cancelled.
-
-**Spotify's media element is never in the DOM**, so its events don't reach `document`.
-Listeners are attached to each element as it is created.
-
-**Nothing scheduled with `requestAnimationFrame` runs in the background.** Anything that
-must keep working with the app off-screen (like the notification's metadata) uses timers.
-
-**media3 only shows a notification for sessions added to the service.** Building a
-`MediaSession` isn't enough; without `addSession()` there is no notification and no
-foreground service, and the OS freezes the app in the background.
