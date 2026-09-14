@@ -1,53 +1,31 @@
-.agent_memory.json
-
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
+# Dependencies
 node_modules
-dist
-dist-ssr
-*.local
 
-# Editor directories and files
+# Build output
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+*.apk
+
+# Generated injector bundles (built by build.ps1). background.js is a source
+# file and must stay tracked, so these are listed individually.
+android/app/src/main/assets/spotilie-ext/index.js
+android/app/src/main/assets/spotilie-ext/page.js
+
+# Editor
 .vscode/*
 !.vscode/extensions.json
 .idea
+*.iml
 .DS_Store
-*.suo
-.agent_memory.json
 
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Compiled/Generated Assets
-src/injector.js
+# Local
 .env
+*.log
+*.keystore
+key.properties
+keystore.properties
 GEMINI.md
+.agent_memory.json
+android/.kotlin

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar / media-notification small icon: the winking grin as a white
+     silhouette (Android renders small icons from alpha only). Viewport crops the
+     108-unit icon to the face. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <group
+        android:translateX="-22"
+        android:translateY="-22">
+        <path
+            android:pathData="M54,26.5a27.5,27.5 0 1,1 0,55a27.5,27.5 0 1,1 0,-55z"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="4" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M39.6,44a3.9,3.9 0 1,0 7.8,0a3.9,3.9 0 1,0 -7.8,0z" />
+        <path
+            android:pathData="M60.5,44.8Q65,40.2 69.5,44.8"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="3.8"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M35.5,55.5Q54,64.5 72.5,54.5"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M38.5,63Q54,70.5 69.5,62"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="4.4"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M42,70Q54,75.5 66,69.5"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="3.8"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

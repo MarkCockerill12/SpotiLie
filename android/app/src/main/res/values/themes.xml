@@ -1,0 +1,9 @@
+<resources>
+    <!-- Edge-to-edge, no action bar. The whole UI is the GeckoView. -->
+    <style name="Theme.SpotiLIE" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/spotify_black</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>

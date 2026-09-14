@@ -1,544 +1,294 @@
 /**
- * SpotiLIE Adblock Module — Nuclear-grade ad elimination
+ * SpotiLIE ad defence (page-side).
  *
- * Four-layer defense:
- * 1. JSON.parse / JSON.stringify interception — spoofs premium status in all parsed data
- * 2. Network interception — blocks fetch/XHR to ad endpoints + returns safe empty responses
- * 3. DOM observer — continuously purges ad elements that slip through
- * 4. Audio ad guard — detects server-side ad insertion, mutes, and aggressively auto-skips
+ * Network-level blocking lives in the extension's background script (plus
+ * uBlock Origin, installed by MainActivity). This module handles only what the
+ * network layer can't:
  *
- * IMPORTANT — "Safe to block" vs "Breaks playback":
- *   ❌ NEVER block: dealer.spotify.com, wg.spotify.com (websocket infra), apresolve, 
- *      spclient.wg.spotify.com (root), exp.spotify.com, log.spotify.com,
- *      analytics.spotify.com — blocking these causes "Playback Paused" freeze loops.
- *   ✅ SAFE to block: audio-ads, adgen, adstudio, ad-proxy, pixel, video-ak, etc.
+ *   1. Optional entitlement spoofing at `JSON.parse` time (off — see below).
+ *   2. DOM purging of ad slots that Spotify renders client-side.
+ *   3. Audio ads, which arrive as ordinary media and can only be caught by
+ *      watching playback. The page world fast-forwards them the instant the
+ *      source changes (page.ts); this side adds the DOM-based corroboration.
  */
 
-// ── Comprehensive Spotify ad endpoint patterns (SAFE ones only) ───────────────
-const AD_PATTERNS: string[] = [
-  // Spotify pure-ad endpoints
-  '/ad-logic/',
-  '/ads/',
-  '/ad-service/',
-  '/commercial/',
-  'spclient.wg.spotify.com/ads',
-  'spclient.wg.spotify.com/ad-logic',
-  'spclient.wg.spotify.com/commercial',
-  'spclient.wg.spotify.com/sponsored',
-  'spclient.wg.spotify.com/rewarded',
-  'spclient.wg.spotify.com/v1/ads',
-  'spclient.wg.spotify.com/ad-service',
-  'spclient.wg.spotify.com/adbreak',
-  'api.spotify.com/v1/ads',
-  'audio-ads.spotify.com',
-  'adeventtracker.spotify.com',
-  'ads-fa.spotify.com',
-  'adgen.spotify.com',
-  'ad-proxy.spotify.com',
-  'adstudio.spotify.com',
-  'ads.spotify.com',
-  'pixel.spotify.com',
-  'video-ak.cdn.spotify.com',
-  'adjust-callback.spotify.com',
-  'crashdump.spotify.com',
-  'datasharing.spotify.com',
+import { coalesced, log, pageAction, pageState, STATE_EVENT, whenBody } from './shared';
 
-  // Google ad services
-  'doubleclick.net',
-  'googleadservices.com',
-  'googletagservices.com',
-  'googlesyndication.com',
-  'google-analytics.com',
-  'pagead2.googlesyndication.com',
-  'securepubads.g.doubleclick.net',
+// ── Layer 1: entitlement spoofing ────────────────────────────────────────────
 
-  // Third-party tracking/ad networks
-  'moatads.com',
-  'comscore.com',
-  'scorecardresearch.com',
-  'branch.io',
-  'branchster.link',
-  'app.link',
-  'facebook.com/tr',
-  'facebook.net/en_US/fbevents.js',
-  'connect.facebook.net',
-  'admob.com',
-  'adsrvr.org',
-  'adnxs.com',
-  'casalemedia.com',
-  'criteo.com',
-  'rubiconproject.com',
-  'openx.net',
-  'pubmatic.com',
-  'freewheel.tv',
-  'spotxchange.com',
-  'liveramp.com',
-  'rlcdn.com',
-];
+/**
+ * OFF by default.
+ *
+ * Measured ceiling (TECHNICAL_SPECS §10): `product` never appears in any JSON
+ * payload — spclient delivers it over protobuf — so this never stopped a single
+ * ad. What it did do was tell a *free* session's client that it was premium
+ * (`isPremium`, `catalogue`), and rewrite `isAd` / `adBreak` / `ad_id` on
+ * whatever payload carried them, including playback state. A client whose
+ * idea of its entitlement and of the current ad slot disagrees with the
+ * server's is a textbook source of "playback breaks after an ad" and "stops
+ * advancing after a few songs". Flip to true only to experiment.
+ */
+const SPOOF_ENTITLEMENTS = false;
 
-// ── Fast regex for pattern matching ──────────────────────────────────────────
-const AD_REGEX = new RegExp(AD_PATTERNS.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
+/**
+ * Objects already processed. A WeakSet is used rather than tagging objects with
+ * a marker property: a marker survives `JSON.stringify` and would be posted
+ * back to Spotify's servers on every round-tripped payload, which is both an
+ * adblock fingerprint and a way to get requests rejected.
+ */
+const seen = new WeakSet<object>();
 
-function isAdUrl(url: string): boolean {
-  return AD_REGEX.test(url);
+/** Counts of entitlement fields actually rewritten; surfaced by the DEBUG probe. */
+export const patchStats: Record<string, number> = Object.create(null);
+const bump = (key: string) => { patchStats[key] = (patchStats[key] || 0) + 1; };
+
+function patchNode(node: any) {
+  if (node.product === 'free' || node.product === 'open') { node.product = 'premium'; bump('product'); }
+  if (node.catalogue === 'free' || node.catalogue === 'open') { node.catalogue = 'premium'; bump('catalogue'); }
+  if (node.canPlayOnDemand !== undefined) { node.canPlayOnDemand = true; bump('canPlayOnDemand'); }
+  if (node.is_premium !== undefined) { node.is_premium = true; bump('is_premium'); }
+  if (node.isPremium !== undefined) { node.isPremium = true; bump('isPremium'); }
+  if (node.isFreeTier !== undefined) node.isFreeTier = false;
+  if (node.isFreeUser !== undefined) node.isFreeUser = false;
+  if (node.adsEnabled !== undefined) node.adsEnabled = false;
+  if (node.audio_ads_enabled !== undefined) node.audio_ads_enabled = false;
 }
 
-// ── Safe empty responses by content type ─────────────────────────────────────
-function makeSafeResponse(url: string): Response {
-  const headers = new Headers({
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': '*',
-    'Access-Control-Allow-Methods': '*',
-  });
-  if (url.includes('.js')) {
-    headers.set('Content-Type', 'application/javascript');
-    return new Response('', { status: 200, headers });
-  }
-  headers.set('Content-Type', 'application/json');
-  return new Response('{}', { status: 200, headers });
-}
+/**
+ * Cheap gate for the deep walk. JSON.parse is extremely hot, so testing the raw
+ * text for a relevant key keeps the common case to a single substring scan.
+ */
+const RELEVANT =
+  /"(product|catalogue|isPremium|is_premium|canPlayOnDemand|isFreeTier|isFreeUser|adsEnabled|audio_ads_enabled)"/;
 
-function stripAdFields(obj: any) {
-  if (!obj || typeof obj !== 'object') return;
-  if (obj.isAd !== undefined) obj.isAd = false;
-  if (obj.is_advertisement !== undefined) obj.is_advertisement = 'false';
-  if (obj.adBreak !== undefined) obj.adBreak = null;
-  if (obj.ad_id !== undefined) delete obj.ad_id;
-  if (obj.ad_type !== undefined) delete obj.ad_type;
-  if (obj.advertisement !== undefined) delete obj.advertisement;
-}
+const MAX_DEPTH = 12;
 
 function spoofPremium(data: any): any {
   if (!data || typeof data !== 'object') return data;
 
-  if ((data as any).__spotilie_spoofed) return data;
-  try { (data as any).__spotilie_spoofed = true; } catch (_) {}
+  const walk = (node: any, depth: number) => {
+    if (!node || typeof node !== 'object' || depth > MAX_DEPTH) return;
+    if (seen.has(node)) return;
+    seen.add(node);
 
-  // ── Account / Player product flags ──────────────────────────────────────────
-  if (data.canPlayOnDemand !== undefined) data.canPlayOnDemand = true;
-  if (data.is_premium !== undefined) data.is_premium = true;
-  if (data.premium !== undefined && typeof data.premium === 'boolean') data.premium = true;
-  if (data.product !== undefined && typeof data.product === 'string') {
-    if (data.product === 'free' || data.product === 'open') data.product = 'premium';
-  }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
 
-  // ── Streaming rules ───────────────────────────────────────────────
-  if (data.streaming_rules) {
-    data.streaming_rules.advancement_disabled = false;
-    data.streaming_rules.advancement_mode = 'NORMAL';
-    data.streaming_rules.skips_unlimited = true;
-    data.streaming_rules.max_skips_per_hour = 999;
-  }
+    patchNode(node);
+    for (const key in node) {
+      const value = node[key];
+      if (value && typeof value === 'object') walk(value, depth + 1);
+    }
+  };
 
-  // ── Skip limits ───────────────────────────────────────────────────
-  if (data.skips_remaining !== undefined) data.skips_remaining = 999;
-  if (data.advancement) {
-    data.advancement.advancement_mode = 'NORMAL';
-    data.advancement.advancement_disabled = false;
-    data.advancement.skips_remaining = 999;
-  }
-
-  // ── Strip ad flags from player state & track queues ───────────────
-  stripAdFields(data.track);
-  stripAdFields(data.item);
-  stripAdFields(data.current_track);
-  stripAdFields(data.context_track);
-
-  if (Array.isArray(data.next_tracks)) {
-    data.next_tracks.forEach(stripAdFields);
-  }
-  if (Array.isArray(data.prev_tracks)) {
-    data.prev_tracks.forEach(stripAdFields);
-  }
-
+  walk(data, 0);
   return data;
 }
 
+/**
+ * PAGE WORLD ONLY — see page.ts. Patching JSON.parse from the content script is
+ * useless: Firefox runs content scripts in an isolated sandbox.
+ */
+export function initJsonSpoofing() {
+  if (!SPOOF_ENTITLEMENTS) return;
+  const originalParse = JSON.parse;
+  JSON.parse = function (text: string, reviver?: any) {
+    const data = reviver ? originalParse(text, reviver) : originalParse(text);
+    if (typeof text === 'string' && RELEVANT.test(text)) return spoofPremium(data);
+    return data;
+  };
+}
+
+/** Deep entitlement patching for callers outside this module (Response.json). */
+export function unlockPayload(data: any): any {
+  return SPOOF_ENTITLEMENTS ? spoofPremium(data) : data;
+}
+
+// ── Layer 2: DOM ad purge ────────────────────────────────────────────────────
+
+/** One combined selector: querySelectorAll walks the document once per call. */
+const AD_SELECTOR = [
+  '[data-testid="ad-indicator"]',
+  '[data-testid="ad-sponsor-container"]',
+  '[data-testid="advertisement"]',
+  '[data-testid="hpto-container"]',
+  '[data-testid="embedded-ad"]',
+  '.Root__ads-container',
+  '.nav-bar-ad-item',
+  '.desktop-media-picker-ads',
+  '[class*="ad-slot"]',
+  '[class*="adSlot"]',
+  '[class*="AdSlot"]',
+  'iframe[src*="doubleclick"]',
+  'iframe[src*="googlesyndication"]',
+  'div[id*="google_ads"]',
+  'div[class*="video-ad"]',
+  'div[class*="videoAd"]',
+].join(',');
+
+function initDomAdPurger() {
+  const purge = () => {
+    for (const el of document.querySelectorAll(AD_SELECTOR)) el.remove();
+  };
+
+  whenBody(() => {
+    purge();
+    // Coalesced onto a frame: the observer fires constantly during React
+    // renders, but the actual DOM query runs at most once per frame.
+    new MutationObserver(coalesced(purge)).observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+  });
+}
+
+// ── Layer 3: audio ads ───────────────────────────────────────────────────────
+
+/** DEBUG hook so the probe can report what the ad guard is seeing. */
+export const adDebug: { get: () => string } = { get: () => 'guard-not-started' };
+
+function initAudioAdGuard() {
+  /** Titles alone are not proof — real tracks are called "Advertisement". */
+  const AD_TITLE = /\b(advertisement|anuncio|anzeige|publicit[ée]|reklama)\b/i;
+
+  const AD_ELEMENT_SELECTOR =
+    '[data-testid="ad-indicator"],[data-testid="ad-sponsor-container"],' +
+    '.Root__ads-container,[class*="ad-overlay"],[class*="video-ad"]';
+
+  /**
+   * Does the now-playing widget link to real catalogue content? Verified on
+   * device: every real item links to /album/, /track/ or /episode/ — an ad
+   * links to nothing.
+   */
+  const CONTENT_LINK = ['/album/', '/track/', '/episode/', '/show/', '/chapter/', '/audiobook/']
+    .flatMap((p) => [
+      `[data-testid="now-playing-widget"] a[href*="${p}"]`,
+      `[data-testid="context-item-link"][href*="${p}"]`,
+    ])
+    .join(',');
+  const hasContentLink = () => !!document.querySelector(CONTENT_LINK);
+
+  let adActive = false;
+  let adStartedAt = 0;
+  let suspectSince = 0;
+
+  /**
+   * The weak "no content link" signal is only trusted once this session has
+   * seen the selector match real content. If Spotify renames the widget, the
+   * link would be "missing" forever and the old guard muted every song.
+   */
+  let linkSelectorProven = false;
+
+  const SUSPECT_MS = 1500;
+  /** Heuristic-only detections give the audio back after this long. */
+  const HEURISTIC_MAX_MS = 40_000;
+
+  const nowPlayingTitle = () =>
+    (document.querySelector('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+
+  adDebug.get = () => [
+    `active=${adActive}`,
+    `pageAd=${pageState.ad}`,
+    `title="${nowPlayingTitle().slice(0, 40)}"`,
+    `adEl=${document.querySelector(AD_ELEMENT_SELECTOR) ? 'YES' : 'no'}`,
+    `contentLink=${hasContentLink() ? 'yes' : 'NO'}`,
+    `proven=${linkSelectorProven}`,
+    `suspect=${suspectSince ? Date.now() - suspectSince : 0}`,
+    `src=${(pageState.src || 'none').slice(-60)}`,
+  ].join(' ');
+
+  const check = () => {
+    const linked = hasContentLink();
+    if (linked) linkSelectorProven = true;
+    const playing = !pageState.paused;
+
+    // Ad markup lingers for a few hundred ms after the break. Once the element is
+    // demonstrably back on catalogue audio (MediaSource blob:), trust that over
+    // the stale DOM — acting on it muted the first ~0.4 s of the next song.
+    const musicPlaying = pageState.hasMedia && !pageState.paused && pageState.src.startsWith('blob:');
+
+    // Unambiguous: the page world saw an ad creative, or Spotify rendered its
+    // own ad markers. Title matches only count without a content link.
+    const definite =
+      pageState.ad ||
+      (!musicPlaying && (
+        !!document.querySelector(AD_ELEMENT_SELECTOR) ||
+        (document.querySelector('[data-testid="context-item-link"]')?.getAttribute('href') || '').includes('/ad/') ||
+        (playing && !linked && (AD_TITLE.test(document.title || '') || AD_TITLE.test(nowPlayingTitle())))
+      ));
+
+    // Weak: playing but linking to nothing. Held for SUSPECT_MS because the link
+    // also disappears for a moment while a real track swaps in. It used to mute
+    // on the very first frame of that, clipping the start of songs.
+    if (playing && linkSelectorProven && !linked) {
+      if (!suspectSince) suspectSince = Date.now();
+    } else {
+      suspectSince = 0;
+    }
+    const sustained = suspectSince > 0 && Date.now() - suspectSince > SUSPECT_MS;
+
+    if (definite || sustained) {
+      if (!adActive) {
+        // Edge trigger: one action per ad.
+        adActive = true;
+        adStartedAt = Date.now();
+        log(`audio ad detected (${pageState.ad ? 'ad creative' : definite ? 'ad markup' : 'no content link'})`);
+        pageAction('mute');
+        pageAction('skip-ad');
+      } else if (!pageState.ad && Date.now() - adStartedAt > HEURISTIC_MAX_MS) {
+        // Never stay latched on heuristics. Stand down until a real content link
+        // is seen again, so this can't oscillate every 40 s either.
+        log('ad guard latched on heuristics too long — restoring audio');
+        adActive = false;
+        suspectSince = 0;
+        linkSelectorProven = false;
+        pageAction('unmute');
+      }
+    } else if (adActive) {
+      adActive = false;
+      log('ad ended — restoring audio');
+      pageAction('unmute');
+    }
+  };
+
+  // Time-based weak signal needs a tick; state changes from the page world and
+  // player DOM mutations trigger an immediate check on top.
+  setInterval(check, 500);
+  const scheduleCheck = coalesced(check);
+  document.addEventListener(STATE_EVENT, scheduleCheck);
+
+  whenBody(() => {
+    let attached = false;
+    const attach = () => {
+      if (attached) return;
+      const bar =
+        document.querySelector('[data-testid="now-playing-bar"]') ||
+        document.querySelector('.Root__now-playing-bar');
+      if (!bar) return;
+      attached = true;
+      new MutationObserver(scheduleCheck).observe(bar, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['aria-label', 'href'],
+      });
+      bodyObserver.disconnect();
+    };
+    const bodyObserver = new MutationObserver(coalesced(attach));
+    bodyObserver.observe(document.body, { childList: true, subtree: true });
+    attach();
+  });
+}
+
+/** Content-world half: everything that only needs the shared DOM. */
 export function initAdblock() {
   try {
-    // ── Layer 0: Headers prototype interception ───────────────────────
-    // Prevent x-cache-hint from EVER being added to any Headers instance.
-    // This resolves CORS preflight failure on spclient.spotify.com/connect-state/v1/cluster
-    try {
-      const origHeadersSet = Headers.prototype.set;
-      Headers.prototype.set = function(name: string, value: string) {
-        if (name && name.toLowerCase() === 'x-cache-hint') return;
-        return origHeadersSet.call(this, name, value);
-      };
-      const origHeadersAppend = Headers.prototype.append;
-      Headers.prototype.append = function(name: string, value: string) {
-        if (name && name.toLowerCase() === 'x-cache-hint') return;
-        return origHeadersAppend.call(this, name, value);
-      };
-    } catch (_) {}
-
-    // ── Layer 1: JSON.parse premium spoofing ──────────────────────────
-    const originalParse = JSON.parse;
-    JSON.parse = function(text: string, reviver?: any) {
-      try {
-        const data = reviver ? originalParse(text, reviver) : originalParse(text);
-        return spoofPremium(data);
-      } catch (e) {
-        try { return originalParse(text); } catch (_) { return null; }
-      }
-    };
-
-    // ── Layer 2a: Fetch interception ──────────────────────────────────
-    const originalFetch = window.fetch;
-    window.fetch = async function(input: RequestInfo | URL, init?: RequestInit) {
-      let reqInput = input;
-      let reqInit = init;
-
-      const url = typeof reqInput === 'string' ? reqInput
-        : (reqInput instanceof URL ? reqInput.toString() : (reqInput as Request).url);
-
-      if (isAdUrl(url)) {
-        return makeSafeResponse(url);
-      }
-
-      // Strip x-cache-hint header from Request object or RequestInit to prevent CORS preflight failure
-      try {
-        if (reqInput instanceof Request) {
-          if (reqInput.headers.has('x-cache-hint') || reqInput.headers.has('X-Cache-Hint')) {
-            const cleanHeaders = new Headers(reqInput.headers);
-            cleanHeaders.delete('x-cache-hint');
-            cleanHeaders.delete('X-Cache-Hint');
-            reqInput = new Request(reqInput, { headers: cleanHeaders });
-          }
-        }
-        if (reqInit && reqInit.headers) {
-          if (reqInit.headers instanceof Headers) {
-            reqInit.headers.delete('x-cache-hint');
-            reqInit.headers.delete('X-Cache-Hint');
-          } else if (Array.isArray(reqInit.headers)) {
-            reqInit.headers = reqInit.headers.filter(([k]) => k.toLowerCase() !== 'x-cache-hint');
-          } else if (typeof reqInit.headers === 'object') {
-            delete (reqInit.headers as any)['x-cache-hint'];
-            delete (reqInit.headers as any)['X-Cache-Hint'];
-          }
-        }
-      } catch (_) {}
-
-      return originalFetch.call(this, reqInput, reqInit);
-    };
-
-    // ── Layer 2b: XHR interception ────────────────────────────────────
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
-    const originalXHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-
-    XMLHttpRequest.prototype.setRequestHeader = function(header: string, _value: string) {
-      if (header && header.toLowerCase() === 'x-cache-hint') {
-        return;
-      }
-      return originalXHRSetHeader.apply(this, arguments as any);
-    };
-
-    XMLHttpRequest.prototype.open = function(_method: string, url: string | URL) {
-      const urlString = url.toString();
-      if (isAdUrl(urlString)) {
-        // @ts-ignore
-        this.__blocked = true;
-      }
-      return originalXHROpen.apply(this, arguments as any);
-    };
-
-    // ── Layer 2c: Worker & sendBeacon interception ────────────────────
-    const originalSendBeacon = navigator.sendBeacon;
-    if (originalSendBeacon) {
-      navigator.sendBeacon = function(url: string | URL, _data?: BodyInit | null) {
-        if (isAdUrl(url.toString())) return true;
-        return originalSendBeacon.apply(this, arguments as any);
-      };
-    }
-
-    const originalWorker = window.Worker;
-    if (originalWorker) {
-      // @ts-ignore
-      window.Worker = function(scriptURL: string | URL, options?: WorkerOptions) {
-        const workerUrl = scriptURL.toString();
-        // Skip blob wrapping for data/blob URLs or cross-origin workers
-        if (workerUrl.startsWith('data:') || workerUrl.startsWith('blob:')) {
-          return new originalWorker(scriptURL, options);
-        }
-        try {
-          const patchScript = `
-            (function() {
-              var origFetch = self.fetch;
-              if (origFetch) {
-                self.fetch = function(input, init) {
-                  var reqInput = input;
-                  var reqInit = init;
-                  try {
-                    if (reqInput instanceof Request) {
-                      if (reqInput.headers.has('x-cache-hint') || reqInput.headers.has('X-Cache-Hint')) {
-                        var cleanHeaders = new Headers(reqInput.headers);
-                        cleanHeaders.delete('x-cache-hint');
-                        cleanHeaders.delete('X-Cache-Hint');
-                        reqInput = new Request(reqInput, { headers: cleanHeaders });
-                      }
-                    }
-                    if (reqInit && reqInit.headers) {
-                      if (reqInit.headers instanceof Headers) {
-                        reqInit.headers.delete('x-cache-hint');
-                        reqInit.headers.delete('X-Cache-Hint');
-                      } else if (Array.isArray(reqInit.headers)) {
-                        reqInit.headers = reqInit.headers.filter(function(pair) { return pair[0].toLowerCase() !== 'x-cache-hint'; });
-                      } else if (typeof reqInit.headers === 'object') {
-                        delete reqInit.headers['x-cache-hint'];
-                        delete reqInit.headers['X-Cache-Hint'];
-                      }
-                    }
-                  } catch(e) {}
-                  return origFetch.call(this, reqInput, reqInit);
-                };
-              }
-            })();
-            importScripts('${workerUrl}');
-          `;
-          const blob = new Blob([patchScript], { type: 'application/javascript' });
-          const blobUrl = URL.createObjectURL(blob);
-          return new originalWorker(blobUrl, options);
-        } catch (_) {
-          return new originalWorker(scriptURL, options);
-        }
-      };
-      window.Worker.prototype = originalWorker.prototype;
-    }
-
-    XMLHttpRequest.prototype.send = function() {
-      // @ts-ignore
-      if (this.__blocked) {
-        // Asynchronously dispatch states to mirror real-browser network requests
-        // and prevent synchronous dispatch callstack crashes.
-        setTimeout(() => {
-          try { Object.defineProperty(this, 'readyState', { get: () => 4, configurable: true }); } catch (_) {}
-          try { Object.defineProperty(this, 'status', { get: () => 200, configurable: true }); } catch (_) {}
-          try { Object.defineProperty(this, 'statusText', { get: () => 'OK', configurable: true }); } catch (_) {}
-          try { Object.defineProperty(this, 'responseText', { get: () => '{}', configurable: true }); } catch (_) {}
-          try { Object.defineProperty(this, 'response', { get: () => '{}', configurable: true }); } catch (_) {}
-          try { this.dispatchEvent(new Event('readystatechange')); } catch (_) {}
-          try { this.dispatchEvent(new Event('load')); } catch (_) {}
-          try { this.dispatchEvent(new Event('loadend')); } catch (_) {}
-          try { if (typeof (this as any).onreadystatechange === 'function') (this as any).onreadystatechange(); } catch (_) {}
-          try { if (typeof (this as any).onload === 'function') (this as any).onload(); } catch (_) {}
-        }, 10);
-        return;
-      }
-      return originalXHRSend.apply(this, arguments as any);
-    };
-
-    // ── Layer 3: DOM ad purger ────────────────────────────────────────
     initDomAdPurger();
-
-    // ── Layer 4: Audio ad auto-mute + auto-skip ───────────────────────
     initAudioAdGuard();
-
-    console.log('SpotiLIE: Nuclear adblock v4 initialized (DOM + Network + JSON + Audio)');
+    log('ad defence active (DOM + audio)');
   } catch (e) {
-    console.error('SpotiLIE: Failed to initialize adblock', e);
+    console.error('SpotiLIE: adblock init failed', e);
   }
 }
-
-/**
- * Layer 3: DOM Ad Purger
- *
- * Watches for and removes ad elements that Spotify injects dynamically
- * via React re-renders. Runs via MutationObserver + interval.
- */
-function initDomAdPurger() {
-  const AD_DOM_SELECTORS = [
-    '[data-testid="ad-indicator"]',
-    '[data-testid="ad-sponsor-container"]',
-    '[data-testid="advertisement"]',
-    '.Root__ads-container',
-    '.nav-bar-ad-item',
-    '.desktop-media-picker-ads',
-    '[class*="ad-slot"]',
-    '[class*="adSlot"]',
-    '[class*="AdSlot"]',
-    'iframe[src*="doubleclick"]',
-    'iframe[src*="googlesyndication"]',
-    'div[id*="google_ads"]',
-    'div[class*="video-ad"]',
-    'div[class*="videoAd"]',
-  ];
-
-  const purge = () => {
-    for (const sel of AD_DOM_SELECTORS) {
-      try {
-        document.querySelectorAll(sel).forEach(el => el.remove());
-      } catch (_) {}
-    }
-  };
-
-  purge();
-  setInterval(purge, 500);
-
-  // MutationObserver for instant removal when Spotify injects ads via React
-  const attachObserver = () => {
-    const obs = new MutationObserver(purge);
-    obs.observe(document.body, { childList: true, subtree: true });
-  };
-
-  if (document.body) {
-    attachObserver();
-  } else {
-    document.addEventListener('DOMContentLoaded', attachObserver, { once: true });
-  }
-}
-
-/**
- * Layer 4: Audio ad auto-mute and auto-skip.
- *
- * Detection:
- * 1. Document title shows "Advertisement" or similar
- * 2. Ad indicator elements appear in the DOM
- * 3. The now-playing info matches ad patterns
- * 4. Track link explicitly points to /ad/
- *
- * Response: Mute → click skip (next) → retry aggressively → unmute after.
- */
-function initAudioAdGuard() {
-  let adActive = false;
-
-  const AD_TITLE_PATTERNS = [
-    /\badvertisement\b/i,
-    /\banuncio\b/i,
-    /\banzeige\b/i,
-    /\bpublicité\b/i,
-    /\bpublicite\b/i,
-    /\bsponsored\b/i,
-    /\bspotify premium\b/i,
-    /\bcommercial\b/i,
-  ];
-
-  const isAdPlaying = (): boolean => {
-    const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
-
-    // Check 1: Audio src URL explicitly mentions ad
-    if (audio?.src && (audio.src.includes('audio-ads') || audio.src.includes('ad-logic') || audio.src.includes('/ad/'))) return true;
-
-    // Check 2: Document title matching ad keywords
-    const title = (document.title || '').trim();
-    if (title && AD_TITLE_PATTERNS.some(p => p.test(title))) return true;
-
-    // Check 3: Explicit Ad indicator elements anywhere in DOM
-    if (document.querySelector('[data-testid="ad-indicator"], [data-testid="ad-sponsor-container"], .Root__ads-container, [class*="ad-overlay"], [class*="video-ad"], [class*="ad-slot"]')) return true;
-
-    // Check 4: Now-playing title text matching ad keywords
-    const nowPlayingTitle = document.querySelector(
-      '[data-testid="context-item-info-title"], [data-testid="now-playing-widget"] [data-testid="context-item-link"]'
-    );
-    if (nowPlayingTitle) {
-      const text = (nowPlayingTitle.textContent || '').toLowerCase().trim();
-      if (text && AD_TITLE_PATTERNS.some(p => p.test(text))) return true;
-    }
-
-    // Check 5: Track link explicitly pointing to /ad/
-    const trackLink = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-bar"] a');
-    if (trackLink) {
-      const href = trackLink.getAttribute('href') || '';
-      if (href.includes('/ad/') || href.includes('advertisement')) return true;
-    }
-
-    return false;
-  };
-
-  const muteAllAudio = () => {
-    document.querySelectorAll('audio, video').forEach(el => {
-      const media = el as HTMLMediaElement;
-      media.muted = true;
-      try { media.volume = 0; } catch (_) {}
-    });
-  };
-
-  const unmuteAllAudio = () => {
-    document.querySelectorAll('audio, video').forEach(el => {
-      const media = el as HTMLMediaElement;
-      media.muted = false;
-      try { media.volume = 1; } catch (_) {}
-    });
-  };
-
-  const skipCurrentAd = () => {
-    muteAllAudio();
-
-    const audio = document.querySelector('audio, video') as HTMLMediaElement | null;
-    if (audio) {
-      try {
-        if (isFinite(audio.duration) && audio.duration > 0) {
-          audio.currentTime = audio.duration - 0.01;
-        } else {
-          audio.currentTime = 999999;
-        }
-        audio.dispatchEvent(new Event('ended'));
-      } catch (_) {}
-    }
-
-    const skipSelectors = [
-      'button[data-testid="control-button-skip-forward"]',
-      'button[aria-label*="next" i]',
-      'button[aria-label*="skip" i]',
-      'button[aria-label*="siguiente" i]',
-      '[data-testid="skip-ad-button"]',
-    ];
-    for (const sel of skipSelectors) {
-      const btns = document.querySelectorAll(sel);
-      btns.forEach(btn => {
-        const htmlBtn = btn as HTMLButtonElement;
-        htmlBtn.removeAttribute('disabled');
-        htmlBtn.removeAttribute('aria-disabled');
-        try { htmlBtn.click(); } catch (_) {}
-      });
-    }
-  };
-
-  const checkAdState = () => {
-    if (isAdPlaying()) {
-      if (!adActive) {
-        adActive = true;
-        console.log('SpotiLIE: Audio ad detected — skipping');
-      }
-      skipCurrentAd();
-    } else {
-      if (adActive) {
-        adActive = false;
-        console.log('SpotiLIE: Ad ended — restoring audio');
-        unmuteAllAudio();
-      }
-    }
-  };
-
-  const titleEl = document.querySelector('title');
-  if (titleEl) {
-    new MutationObserver(checkAdState).observe(titleEl, {
-      subtree: true, characterData: true, childList: true
-    });
-  }
-
-  const attachNowPlayingObserver = () => {
-    const bar = document.querySelector('[data-testid="now-playing-bar"]') ||
-                document.querySelector('.Root__now-playing-bar');
-    if (bar) {
-      new MutationObserver(checkAdState).observe(bar, {
-        subtree: true, childList: true, attributes: true
-      });
-    }
-  };
-  if (document.body) {
-    attachNowPlayingObserver();
-    new MutationObserver(() => attachNowPlayingObserver()).observe(document.body, { childList: true });
-  }
-
-  document.addEventListener('loadedmetadata', (e) => {
-    if ((e.target as HTMLElement)?.tagName === 'AUDIO') checkAdState();
-  }, true);
-
-  document.addEventListener('play', (e) => {
-    if ((e.target as HTMLElement)?.tagName === 'AUDIO') checkAdState();
-  }, true);
-
-  setInterval(checkAdState, 500);
-}
-
