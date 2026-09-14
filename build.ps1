@@ -24,7 +24,8 @@ if (-not $adb) { $adb = (Get-Command adb -ErrorAction SilentlyContinue).Source }
 if (-not $adb) { Write-Host "adb not found. Set ANDROID_HOME or put platform-tools on PATH." -ForegroundColor Red; exit 1 }
 $injectorJs = "android/app/src/main/assets/spotilie-ext/index.js"
 $variant    = if ($Release) { "Release" } else { "Debug" }
-$apkPath    = "android/app/build/outputs/apk/$($variant.ToLower())/app-$($variant.ToLower()).apk"
+# Release builds are split per ABI (see app/build.gradle.kts); install the arm64 one.
+$apkPath    = if ($Release) { "android/app/build/outputs/apk/release/app-arm64-v8a-release.apk" } else { "android/app/build/outputs/apk/debug/app-debug.apk" }
 
 # ── 1. Injector ───────────────────────────────────────────────────────────────
 Write-Host "--- 1. Building injector ---" -ForegroundColor Cyan

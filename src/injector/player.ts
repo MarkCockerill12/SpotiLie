@@ -173,8 +173,15 @@ function initPlaybackWatchdog() {
     lastPosition = pageState.position;
     lastClock = clock;
 
-    // Playing according to either side: the element (if we have it) or the UI.
-    const claimsPlaying = (pageState.hasMedia && !pageState.paused) || uiSaysPlaying();
+    // Only when a real track is loaded. On a fresh, logged-out install the landing
+    // page has media that "plays" without advancing, and the watchdog reloaded
+    // that page every few minutes (verified on a clean release install). So:
+    // a title in the player, and either Spotify's own button says playing or the
+    // element playing is catalogue audio (MediaSource blob:) or an ad creative.
+    const hasTrack = !!document.querySelector('[data-testid="context-item-info-title"]')?.textContent?.trim();
+    const elementPlaying =
+      pageState.hasMedia && !pageState.paused && (pageState.src.startsWith('blob:') || pageState.ad);
+    const claimsPlaying = hasTrack && (elementPlaying || uiSaysPlaying());
 
     if (!claimsPlaying || moving || !navigator.onLine) {
       stuckSince = 0;

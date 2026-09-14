@@ -24,6 +24,7 @@ android/app/src/main/assets/spotilie-ext/page.js
 .env
 *.log
 *.keystore
+*.jks
 key.properties
 keystore.properties
 GEMINI.md

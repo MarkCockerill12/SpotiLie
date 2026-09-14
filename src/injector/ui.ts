@@ -193,7 +193,9 @@ function initPlayerSheet() {
  * that stays true across their markup churn. Run on demand, not on a timer.
  */
 function hideDesktopPromos() {
-  const PROMO = /^\s*(install app|get the app|download app|upgrade to premium|explore premium|upgrade)\s*$/i;
+  // Prefix match: the logged-out top bar's "Install app" carries extra text (an
+  // icon label) and slipped past an exact match on a clean install.
+  const PROMO = /^\s*(install( the)? app|get the app|download( the)? app|upgrade to premium|explore premium|upgrade\b)/i;
 
   const scan = () => {
     for (const el of document.querySelectorAll('a, button')) {

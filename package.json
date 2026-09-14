@@ -1,7 +1,7 @@
 {
   "name": "spotilie",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "build": "bun build src/injector/index.ts src/injector/page.ts --outdir android/app/src/main/assets/spotilie-ext --entry-naming '[name].js' --target browser --env='SPOTILIE_*' --minify",
