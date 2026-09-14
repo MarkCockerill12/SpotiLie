@@ -6,12 +6,12 @@
  * that re-renders constantly.
  */
 
-declare const process: { env: { SPOTILIE_DEBUG?: string } };
-
 /**
- * Set by `build.ps1 -Debug`. Bun inlines the value at build time, so a normal
- * build constant-folds every `log()` call away instead of shipping console
- * noise — the old build logged every tap and every play() call in production.
+ * Set by `build.ps1 -Debug` (`process` is declared in src/env.d.ts). Bun inlines
+ * the value at build time, so in a normal build this is `false` and every
+ * `log()` call is a no-op. Note it does not *remove* code guarded by this const
+ * from the bundle — for debug-only code that must not ship at all, test
+ * `process.env.SPOTILIE_DEBUG === '1'` directly at the call site instead.
  */
 export const DEBUG = process.env.SPOTILIE_DEBUG === '1';
 

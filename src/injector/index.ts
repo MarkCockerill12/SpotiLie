@@ -41,7 +41,8 @@ function injectPageScript() {
   initAdblock();
   initUI();
   initPlayer();
-  initDomProbe();
+  // Inline env test so release bundles drop the probe entirely (src/env.d.ts).
+  if (process.env.SPOTILIE_DEBUG === '1') initDomProbe();
 
   log('content script active');
 })();
