@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "SpotiLIE",
+  "version": "3.0",
+  "description": "SpotiLIE engine injector and network ad filter",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "spotilie@local"
+    }
+  },
+  "permissions": [
+    "geckoViewAddons",
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "tabs",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["index.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": ["page.js"]
+}

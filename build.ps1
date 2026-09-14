@@ -1,94 +1,73 @@
-# SpotiLIE Build & Deploy Script
+# SpotiLIE build & deploy.
 #
-# Usage:
-#   .\build.ps1           — Full rebuild (Rust + Kotlin + Gradle + deploy)
-#   .\build.ps1 -JSOnly   — JS injector change only (skip Rust, ~30s)
+#   .\build.ps1              Build, install, launch
+#   .\build.ps1 -Debug       Same, with injector console logging enabled
+#   .\build.ps1 -Release     Minified/shrunk release APK
+#   .\build.ps1 -Logs        Tail logcat after launching
 #
-# NOTE: Windows symlink restriction prevents 'tauri android build' from linking
-# the .so automatically. This script uses Copy-Item as a workaround after
-# the Rust library has been compiled.
+# There is no Rust step any more: the Tauri layer never executed (MainActivity
+# hosts GeckoView directly and never loaded the native library), so it was
+# removed along with the 139 MB .so it was shipping inside the APK.
 
 param(
-    [switch]$JSOnly   # Skip Rust recompilation, use last built .so
+    [switch]$Debug,
+    [switch]$Release,
+    [switch]$Logs
 )
 
-$adb     = "C:/Users/Mark/AppData/Local/Android/Sdk/platform-tools/adb.exe"
-$soSrc   = "src-tauri/target/aarch64-linux-android/debug/libtauri_app_lib.so"
-$soDest  = "src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libtauri_app_lib.so"
-$apkPath = "src-tauri/gen/android/app/build/outputs/apk/debug/app-debug.apk"
+$ErrorActionPreference = "Stop"
 
-# ── 1. Build JS injector ──────────────────────────────────────────────────────
-Write-Host "--- 1. Building Injector ---" -ForegroundColor Cyan
-& bun build src/injector/index.ts --outfile src/injector.js --minify
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Injector build failed" -ForegroundColor Red; exit 1 }
-Write-Host "Injector built ($(((Get-Item 'src/injector.js').Length / 1KB).ToString('F1')) KB)" -ForegroundColor Green
+# adb: SDK env vars first, then PATH, then the Android Studio default location.
+$sdkRoots = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, (Join-Path $env:LOCALAPPDATA "Android/Sdk")) | Where-Object { $_ }
+$adb = $sdkRoots | ForEach-Object { Join-Path $_ "platform-tools/adb.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $adb) { $adb = (Get-Command adb -ErrorAction SilentlyContinue).Source }
+if (-not $adb) { Write-Host "adb not found. Set ANDROID_HOME or put platform-tools on PATH." -ForegroundColor Red; exit 1 }
+$injectorJs = "android/app/src/main/assets/spotilie-ext/index.js"
+$variant    = if ($Release) { "Release" } else { "Debug" }
+$apkPath    = "android/app/build/outputs/apk/$($variant.ToLower())/app-$($variant.ToLower()).apk"
 
-# ── 2. Sync injector to Android assets ───────────────────────────────────────
-Write-Host "--- 2. Syncing to Android Assets ---" -ForegroundColor Cyan
-$assetsDir = "src-tauri/gen/android/app/src/main/assets"
-$extDir = "$assetsDir/spotilie-ext"
-if (!(Test-Path $extDir)) { New-Item -ItemType Directory -Path $extDir -Force | Out-Null }
-Copy-Item -Path "src/injector.js" -Destination "$assetsDir/injector.js" -Force
-Copy-Item -Path "src/injector.js" -Destination "$extDir/injector.js" -Force
-Write-Host "Injector synced to assets and GeckoView extension." -ForegroundColor Green
+# ── 1. Injector ───────────────────────────────────────────────────────────────
+Write-Host "--- 1. Building injector ---" -ForegroundColor Cyan
+$env:SPOTILIE_DEBUG = if ($Debug) { "1" } else { "0" }
+& bun run build
+if ($LASTEXITCODE -ne 0) { Write-Host "Injector build failed" -ForegroundColor Red; exit 1 }
+$size = (Get-Item $injectorJs).Length / 1KB
+Write-Host ("Injector built ({0:F1} KB, debug={1})" -f $size, $env:SPOTILIE_DEBUG) -ForegroundColor Green
 
-# ── 3. Rust compilation (skipped with -JSOnly) ────────────────────────────────
-if (-not $JSOnly) {
-    Write-Host "--- 3. Compiling Rust Library (NDK aarch64) ---" -ForegroundColor Cyan
-    Write-Host "(~1 min incremental, ~5 min clean)" -ForegroundColor DarkGray
-
-    # Touch lib.rs to force Cargo to re-evaluate include_str!("../../src/injector.js")
-    (Get-Item "src-tauri/src/lib.rs").LastWriteTime = Get-Date
-
-    $env:TAURI_SKIP_DEVSERVER_CHECK = "true"
-    & bun tauri android build --apk --debug 2>&1 | ForEach-Object {
-        Write-Host $_
-        # Stop once Rust finishes (symlink error will follow but .so is already written)
-        if ($_ -match "Finished .* target\(s\) in") { Write-Host "Rust compiled OK" -ForegroundColor Green }
-    }
-    # Don't fail on the symlink error — we copy manually below
-} else {
-    Write-Host "--- 3. Skipping Rust (using cached .so) ---" -ForegroundColor DarkGray
+# ── 2. APK ────────────────────────────────────────────────────────────────────
+Write-Host "--- 2. Building APK ($variant) ---" -ForegroundColor Cyan
+Push-Location android
+try {
+    $debugProp = if ($Debug) { "-PspotilieDebug=true" } else { "-PspotilieDebug=false" }
+    & ./gradlew "assemble$variant" $debugProp --console=plain
+    $gradleExit = $LASTEXITCODE
+} finally {
+    Pop-Location
 }
+if ($gradleExit -ne 0) { Write-Host "Gradle build failed" -ForegroundColor Red; exit 1 }
+Write-Host ("APK built ({0:F1} MB)" -f ((Get-Item $apkPath).Length / 1MB)) -ForegroundColor Green
 
-# ── 4. Copy .so into jniLibs (Windows symlink workaround) ────────────────────
-Write-Host "--- 4. Copying Rust .so to jniLibs ---" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path "src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a" | Out-Null
-if (Test-Path $soSrc) {
-    Copy-Item -Path $soSrc -Destination $soDest -Force
-    Write-Host "Library copied (built: $((Get-Item $soDest).LastWriteTime))" -ForegroundColor Green
-} else {
-    Write-Host "WARNING: Rust .so not found at $soSrc" -ForegroundColor Yellow
-    Write-Host "If this is the first build, run without -JSOnly first." -ForegroundColor Yellow
-}
-
-# ── 5. Gradle assembleDebug ───────────────────────────────────────────────────
-Write-Host "--- 5. Building Android APK (Gradle) ---" -ForegroundColor Cyan
-Push-Location src-tauri/gen/android
-./gradlew assembleDebug 2>&1
-$gradleResult = $LASTEXITCODE
-Pop-Location
-if ($gradleResult -ne 0) { Write-Host "ERROR: Gradle build failed" -ForegroundColor Red; exit 1 }
-Write-Host "APK built." -ForegroundColor Green
-
-# ── 6. Install to device ──────────────────────────────────────────────────────
-Write-Host "--- 6. Installing to Phone ---" -ForegroundColor Cyan
-$deviceLines = & $adb devices 2>&1
-if ($deviceLines -match "unauthorized") {
-    Write-Host "ERROR: Device unauthorized." -ForegroundColor Red
-    Write-Host "  → Look for 'Allow USB debugging?' dialog on your phone and tap Allow." -ForegroundColor Yellow
+# ── 3. Install ────────────────────────────────────────────────────────────────
+Write-Host "--- 3. Installing ---" -ForegroundColor Cyan
+$devices = & $adb devices 2>&1
+if ($devices -match "unauthorized") {
+    Write-Host "Device unauthorized - accept the USB debugging prompt on the phone." -ForegroundColor Red
     exit 1
 }
-if (-not ($deviceLines -match "\bdevice\b")) {
-    Write-Host "ERROR: No authorized device found. Connect phone via USB." -ForegroundColor Red
+if (-not ($devices -match "\bdevice\b")) {
+    Write-Host "No device found. Connect the phone over USB." -ForegroundColor Red
     exit 1
 }
 
 & $adb install -r $apkPath
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: ADB install failed" -ForegroundColor Red; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Host "adb install failed" -ForegroundColor Red; exit 1 }
 
-# ── 7. Launch ─────────────────────────────────────────────────────────────────
-Write-Host "--- 7. Launching SpotiLIE ---" -ForegroundColor Cyan
-& $adb shell am start -n com.spotilie.app/com.spotilie.app.MainActivity
+# ── 4. Launch ─────────────────────────────────────────────────────────────────
+Write-Host "--- 4. Launching ---" -ForegroundColor Cyan
+& $adb shell am start -n com.spotilie.app/com.spotilie.app.MainActivity | Out-Null
 
-Write-Host '  Tip: Use .\build.ps1 -JSOnly for injector-only changes (~30s)' -ForegroundColor DarkGray
+if ($Logs) {
+    Write-Host "--- Tailing logcat (Ctrl+C to stop) ---" -ForegroundColor Cyan
+    & $adb logcat -c
+    & $adb logcat SpotiLIE:V GeckoConsole:V AndroidRuntime:E "*:S"
+}

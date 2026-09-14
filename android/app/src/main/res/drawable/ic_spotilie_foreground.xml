@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SpotiLIE: Spotify's three sound waves bent into a sly grin, with a wink —
+     the player that's lying about what it is. Everything sits inside the 66dp
+     adaptive-icon safe zone, so no launcher mask crops it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- face -->
+    <path
+        android:fillColor="#FF1DB954"
+        android:pathData="M54,24a30,30 0 1,1 0,60a30,30 0 1,1 0,-60z" />
+
+    <!-- open eye -->
+    <path
+        android:fillColor="#FF0B0B0B"
+        android:pathData="M40.1,44a3.4,3.4 0 1,0 6.8,0a3.4,3.4 0 1,0 -6.8,0z" />
+
+    <!-- wink -->
+    <path
+        android:pathData="M60.5,44.8Q65,40.2 69.5,44.8"
+        android:strokeColor="#FF0B0B0B"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round" />
+
+    <!-- sound-wave grin -->
+    <path
+        android:pathData="M35.5,55.5Q54,64.5 72.5,54.5"
+        android:strokeColor="#FF0B0B0B"
+        android:strokeWidth="4.6"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M38.5,63Q54,70.5 69.5,62"
+        android:strokeColor="#FF0B0B0B"
+        android:strokeWidth="3.9"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M42,70Q54,75.5 66,69.5"
+        android:strokeColor="#FF0B0B0B"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round" />
+</vector>
