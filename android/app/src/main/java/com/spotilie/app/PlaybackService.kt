@@ -8,14 +8,23 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
+import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.IntentCompat
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 
 /**
  * Hosts the media session. media3 builds the MediaStyle notification, loads
@@ -36,7 +45,7 @@ class PlaybackService : MediaSessionService() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
                 Log.d(TAG, "Audio becoming noisy — pausing")
-                MainActivity.instance?.sendMediaAction("pause", 0L)
+                PlayerHost.sendMediaAction("pause")
             }
         }
     }
@@ -63,16 +72,32 @@ class PlaybackService : MediaSessionService() {
             }
             if (isAudio) {
                 Log.d(TAG, "Bluetooth audio device disconnected — pausing")
-                MainActivity.instance?.sendMediaAction("pause", 0L)
+                PlayerHost.sendMediaAction("pause")
             }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        PlayerHost.init(this)
 
         val webPlayer = WebPlayer(Looper.getMainLooper()).apply {
-            actionSink = { action, arg -> MainActivity.instance?.sendMediaAction(action, arg) }
+            actionSink = { action, arg ->
+                // Hold the locks from the press: a headless rebuild with the screen
+                // off has to load the page before it reports playing.
+                if (action == "play") setPlaybackLocks(true)
+                PlayerHost.sendMediaAction(action, arg)
+            }
+            // After a process restart there is no page yet: show the last track
+            // (paused) so the lock screen, notification and earbuds have something
+            // to resume — play builds the player headless and continues.
+            PlayerHost.store.load()?.let {
+                restore(it.title, it.artist, it.artwork, it.durationMs, it.positionMs)
+            }
+            // The notification's save button mirrors Spotify's save state.
+            onModesChanged = { m ->
+                mediaSession?.setMediaButtonPreferences(saveButtons(m.saved == 1))
+            }
         }
         player = webPlayer
         instance = this
@@ -93,6 +118,8 @@ class PlaybackService : MediaSessionService() {
                     android.app.PendingIntent.FLAG_IMMUTABLE
                 )
             )
+            .setCallback(sessionCallback)
+            .setMediaButtonPreferences(saveButtons(saved = false))
             .build()
             .also { session ->
                 /*
@@ -124,10 +151,64 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // ── Notification save (like) button ─────────────────────────────────────
+
+    private val saveCommand = SessionCommand(COMMAND_SAVE, Bundle.EMPTY)
+
+    /**
+     * Spotify's own "+" / "✓": + saves to Liked Songs, ✓ removes it again.
+     *
+     * SLOT_OVERFLOW, not SLOT_FORWARD_SECONDARY: media3 1.10 only turns overflow
+     * buttons into platform custom actions when back/forward are taken by
+     * previous/next — a secondary-slot button never reached the notification
+     * or the lock screen (verified: platform `custom actions=[]`).
+     */
+    private fun saveButtons(saved: Boolean): List<CommandButton> = listOf(
+        CommandButton.Builder(if (saved) CommandButton.ICON_CHECK_CIRCLE_FILLED else CommandButton.ICON_PLUS_CIRCLE_UNFILLED)
+            .setDisplayName(if (saved) "Remove from Liked Songs" else "Save to Liked Songs")
+            .setSessionCommand(saveCommand)
+            .setSlots(CommandButton.SLOT_OVERFLOW)
+            .build()
+    )
+
+    private val sessionCallback = object : MediaSession.Callback {
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): MediaSession.ConnectionResult {
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                        .add(saveCommand)
+                        .build()
+                )
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == COMMAND_SAVE) {
+                // Toggle Liked Songs for the current track.
+                PlayerHost.sendMediaAction("like-toggle")
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
+    }
+
+    /** From [PlayerHost] with each metadata report. */
+    fun updateModes(modes: WebPlayer.Modes) {
+        player?.updateModes(modes)
+    }
+
     private fun receiverFlags(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Context.RECEIVER_EXPORTED else 0
 
-    /** Called from [MainActivity] when the injector reports a track change. */
+    /** Called from [PlayerHost] when the injector reports a track change. */
     fun updateMetadata(
         title: String,
         artist: String,
@@ -137,6 +218,59 @@ class PlaybackService : MediaSessionService() {
         positionMs: Long
     ) {
         player?.updateFromWeb(title, artist, artworkUrl, isPlaying, durationMs, positionMs)
+        setPlaybackLocks(isPlaying)
+    }
+
+    // ── Wake / Wi-Fi locks ───────────────────────────────────────────────────
+
+    /*
+     * We don't own the audio pipeline, so nothing did what ExoPlayer's
+     * WAKE_MODE_NETWORK does for a native player. With the screen off:
+     *  - Wi-Fi drops into power-save, and Spotify's MediaSource segment fetches
+     *    and dealer websocket stall or time out ("loses connection");
+     *  - the CPU may suspend in any silent gap — between tracks, during an ad
+     *    break, while rebuffering — when AudioFlinger isn't holding it awake,
+     *    and the next stream never gets fetched.
+     * Held while playing, plus a grace period after a pause so track changes
+     * and ad transitions (which briefly report paused) don't let go.
+     */
+    private val wakeLock: PowerManager.WakeLock by lazy {
+        (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SpotiLIE:playback")
+            .apply { setReferenceCounted(false) }
+    }
+
+    @Suppress("DEPRECATION")
+    private val wifiLock: WifiManager.WifiLock? by lazy {
+        (applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+            ?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "SpotiLIE:playback")
+            ?.apply { setReferenceCounted(false) }
+    }
+
+    private val lockHandler = Handler(Looper.getMainLooper())
+    private val releaseLocks = Runnable {
+        try { if (wakeLock.isHeld) wakeLock.release() } catch (_: Exception) {}
+        try { wifiLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
+        Log.d(TAG, "Playback locks released")
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private fun setPlaybackLocks(playing: Boolean) {
+        if (playing) {
+            lockHandler.removeCallbacks(releaseLocks)
+            try {
+                if (!wakeLock.isHeld) {
+                    wakeLock.acquire()
+                    Log.d(TAG, "Playback locks acquired")
+                }
+                wifiLock?.let { if (!it.isHeld) it.acquire() }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not acquire playback locks: ${e.message}")
+            }
+        } else if (wakeLock.isHeld) {
+            lockHandler.removeCallbacks(releaseLocks)
+            lockHandler.postDelayed(releaseLocks, LOCK_GRACE_MS)
+        }
     }
 
     /** Whether the web player last reported that it is playing. */
@@ -144,7 +278,11 @@ class PlaybackService : MediaSessionService() {
 
     /** The web player's process died and is being rebuilt; stop claiming it plays. */
     fun onWebPlayerReset() {
+        // Mid-song kill: keep showing playing (and keep the locks) while it rebuilds.
+        if (PlayerHost.resumePending()) return
         player?.markPaused()
+        // Keep the locks through the grace period.
+        setPlaybackLocks(false)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -155,13 +293,15 @@ class PlaybackService : MediaSessionService() {
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.d(TAG, "Task removed — killing playback")
-        MainActivity.instance?.stopSession()
+        PlayerHost.stop()
         stopSelf()
         super.onTaskRemoved(rootIntent)
         android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onDestroy() {
+        lockHandler.removeCallbacks(releaseLocks)
+        releaseLocks.run()
         try { unregisterReceiver(becomingNoisyReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(bluetoothDisconnectReceiver) } catch (_: Exception) {}
         mediaSession?.release()
@@ -173,6 +313,10 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         private const val TAG = "SpotiLIE"
+        const val COMMAND_SAVE = "spotilie.SAVE"
+
+        /** Locks outlive a pause by this much: covers track changes, ad breaks, rebuffers. */
+        private const val LOCK_GRACE_MS = 2L * 60 * 1000
 
         @Volatile
         var instance: PlaybackService? = null

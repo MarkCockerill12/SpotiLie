@@ -41,5 +41,17 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- Play from earbuds / car / lock screen while the app isn't running:
+             starts PlaybackService, which restores the last track and builds the
+             web player headless (PlayerHost). Without it, a media button with no
+             live process went nowhere. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -12,7 +12,7 @@
 import { adDebug } from './adblock';
 import {
   coalesced, coalescedTimer, DEBUG, debugDump, ext, log, PAGE_LOG_EVENT, pageAction, pageState,
-  requestReload, sendNative, warn, whenBody,
+  largeArtwork, readNowPlaying, requestReload, sendNative, TO_NATIVE_EVENT, warn, whenBody,
 } from './shared';
 
 export function initPlayer() {
@@ -47,8 +47,16 @@ function initNativeMessageListener() {
   if (!api?.runtime?.onMessage) return;
   api.runtime.onMessage.addListener((msg: any) => {
     if (msg?.type === 'MEDIA_ACTION' && typeof msg.action === 'string') {
-      pageAction(msg.action, msg.value || 0);
+      pageAction(msg.action, msg.value || 0, typeof msg.arg === 'string' ? msg.arg : '');
     }
+  });
+
+  // Page world → native (e.g. the save picker's contents for the native sheet).
+  document.addEventListener(TO_NATIVE_EVENT, (e) => {
+    try {
+      const msg = JSON.parse((e as CustomEvent).detail);
+      if (msg && typeof msg.type === 'string') sendNative(msg);
+    } catch (_) {}
   });
 }
 
@@ -181,7 +189,7 @@ function initPlaybackWatchdog() {
     // that page every few minutes (verified on a clean release install). So:
     // a title in the player, and either Spotify's own button says playing or the
     // element playing is catalogue audio (MediaSource blob:) or an ad creative.
-    const hasTrack = !!document.querySelector('[data-testid="context-item-info-title"]')?.textContent?.trim();
+    const hasTrack = !!readNowPlaying().title;
     const elementPlaying =
       pageState.hasMedia && !pageState.paused && (pageState.src.startsWith('blob:') || pageState.ad);
     const claimsPlaying = hasTrack && (elementPlaying || uiSaysPlaying());
@@ -230,6 +238,9 @@ interface TrackInfo {
   isPlaying: boolean;
   duration: number;
   position: number;
+  saved: number;
+  repeat: number;
+  shuffle: number;
 }
 
 function initMetadataSync() {
@@ -239,13 +250,6 @@ function initMetadataSync() {
   // label is the fallback (and is localised).
   const isPlaying = (): boolean => (pageState.hasMedia ? !pageState.paused : uiSaysPlaying());
 
-  /** Ask for the 640px rendition rather than the bar's 64px thumbnail. */
-  const readArtwork = (): string => {
-    const img = document.querySelector(
-      '[data-testid="now-playing-widget"] img, [data-testid="cover-art-image"]'
-    ) as HTMLImageElement | null;
-    return (img?.src || '').replace(/ab67616d0000(4851|1e02)/, 'ab67616d0000b273');
-  };
 
   /**
    * "3:45" → ms, and whether it was negative. Spotify's duration field shows
@@ -277,25 +281,26 @@ function initMetadataSync() {
   };
 
   const readTrack = (): TrackInfo | null => {
-    const titleEl = document.querySelector('[data-testid="context-item-info-title"]');
-    const artistEl = document.querySelector('[data-testid="context-item-info-subtitles"]');
-
-    let title = titleEl?.textContent?.trim() || '';
-    let artist = artistEl?.textContent?.trim() || '';
+    const now = readNowPlaying();
+    let { title, artist } = now;
 
     if (!title) {
+      // Tab title while playing: "Song - Artist" (old) or "Song • Artist" (late 2026).
       const docTitle = (document.title || '').trim();
-      const dash = docTitle.indexOf(' - ');
-      if (dash < 1) return null;
-      title = docTitle.slice(0, dash).trim();
-      artist = docTitle.slice(dash + 3).trim();
+      const m = docTitle.match(/^(.+?)\s[-•]\s(.+)$/);
+      if (!m) return null;
+      title = m[1].trim();
+      artist = m[2].trim();
       const dot = artist.lastIndexOf(' · ');
       if (dot > 0) artist = artist.slice(0, dot).trim();
     }
 
     if (!title || title.toLowerCase() === 'spotify') return null;
 
-    return { title, artist, artwork: readArtwork(), isPlaying: isPlaying(), ...readTiming() };
+    return {
+      title, artist, artwork: largeArtwork(now.artwork), isPlaying: isPlaying(), ...readTiming(),
+      saved: now.saved, repeat: now.repeat, shuffle: now.shuffle,
+    };
   };
 
   // Where media3 thinks playback is: the last position we sent, extrapolated.
@@ -311,7 +316,8 @@ function initMetadataSync() {
     // isn't part of the change key — otherwise every tick would be a change.
     // But a *jump* (a seek from the notification or in-app, or a stall) must be
     // sent, or the notification keeps showing the old time.
-    const key = `${track.title}|${track.artist}|${track.artwork}|${track.isPlaying}|${track.duration}`;
+    const key = `${track.title}|${track.artist}|${track.artwork}|${track.isPlaying}|${track.duration}` +
+      `|${track.saved}|${track.repeat}|${track.shuffle}`;
     const now = Date.now();
     const expected = sentPlaying ? sentPosition + (now - sentAt) : sentPosition;
     const jumped = Math.abs(track.position - expected) > 2500;
@@ -354,7 +360,7 @@ function initMetadataSync() {
       attached = true;
       new MutationObserver(scheduleSend).observe(bar, {
         subtree: true, childList: true, characterData: true,
-        attributes: true, attributeFilter: ['aria-label', 'src'],
+        attributes: true, attributeFilter: ['aria-label', 'aria-checked', 'src', 'href'],
       });
       observer.disconnect();
     };
@@ -381,13 +387,12 @@ function initDebugHooks() {
 
   ext()?.runtime?.onMessage?.addListener((msg: any) => {
     if (msg?.type !== 'DEBUG_EVAL' || typeof msg.js !== 'string') return;
-    let out: string;
+    const show = (v: unknown) => debugDump(`EVAL> ${typeof v === 'string' ? v : JSON.stringify(v)}`);
     try {
-      const result = new Function(msg.js)();
-      out = typeof result === 'string' ? result : JSON.stringify(result);
+      // Async probes (open a menu, wait, read it) return a promise.
+      Promise.resolve(new Function(msg.js)()).then(show, (err) => show(`EVAL ERROR: ${err}`));
     } catch (err) {
-      out = `EVAL ERROR: ${err}`;
+      show(`EVAL ERROR: ${err}`);
     }
-    debugDump(`EVAL> ${out}`);
   });
 }

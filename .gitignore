@@ -30,3 +30,6 @@ keystore.properties
 GEMINI.md
 .agent_memory.json
 android/.kotlin
+
+# local debug helpers
+scripts/

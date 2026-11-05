@@ -241,7 +241,7 @@ function connectToNative() {
     nativePort.onMessage.addListener((msg) => {
       if (!msg) return;
       if (msg.action) {
-        broadcast({ type: "MEDIA_ACTION", action: msg.action, value: msg.value });
+        broadcast({ type: "MEDIA_ACTION", action: msg.action, value: msg.value, arg: msg.arg });
       }
       switch (msg.type) {
         case "SET_NAV_HEIGHT":
@@ -268,7 +268,7 @@ function connectToNative() {
 }
 
 /** Content → native message types that are relayed as-is. */
-const PASSTHROUGH = new Set(["RELOAD", "OVERLAY", "DEBUG_DUMP", "DEBUG_NET", "PAGE_LOG"]);
+const PASSTHROUGH = new Set(["RELOAD", "OVERLAY", "DEBUG_DUMP", "DEBUG_NET", "PAGE_LOG", "MENU", "MENU_DONE", "MENU_DIALOG", "SHARE_TEXT"]);
 
 browser.runtime.onMessage.addListener((msg) => {
   if (!msg || !nativePort) return;

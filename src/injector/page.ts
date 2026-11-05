@@ -14,6 +14,7 @@
 
 import { initJsonSpoofing, patchStats } from './adblock';
 import { initDesktop } from './desktop';
+import { handleControlAction, initControls } from './controls';
 import { ACTION_EVENT, DEBUG, NAV_EVENT, PAGE_LOG_EVENT, STATE_EVENT } from './shared';
 
 function pageLog(text: string) {
@@ -93,6 +94,10 @@ function captureMediaElements() {
   const originalPlay = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
     register(this);
+    // Canvas loops: nobody can see them (the native player replaced Spotify's
+    // now-playing view), yet they streamed and hardware-decoded video in the
+    // background next to the music. Report success, play nothing.
+    if (isDecoration(this)) return Promise.resolve();
     return originalPlay.apply(this);
   };
 }
@@ -248,6 +253,11 @@ function idOf(el: HTMLMediaElement): number {
 
 function onMediaEvent(e: Event) {
   const el = e.currentTarget as HTMLMediaElement;
+  // Same for decoration started via `autoplay` rather than play().
+  if (e.type === 'play' && isDecoration(el)) {
+    try { el.pause(); } catch (_) {}
+    return;
+  }
   if (e.type === 'play' || e.type === 'playing') lastPlayed = el;
   guardAd(el, e.type);
 
@@ -290,7 +300,9 @@ function setMutedAll(muted: boolean) {
   for (const el of elements) guardAd(el);
 }
 
-function handleAction(action: string, value: number) {
+function handleAction(action: string, value: number, arg: string) {
+  // Library / mode controls (shuffle, repeat, save, playlists) live in controls.ts.
+  if (handleControlAction(action, value, arg)) return;
   switch (action) {
     case 'play':
       if (!isPlaying() && !clickSelector(PLAY_PAUSE)) current()?.play().catch(() => {});
@@ -387,6 +399,7 @@ function reportState() {
   captureMediaElements();
   initJsonSpoofing();
   initDesktop();
+  initControls();
 
   pageLog(
     `page.js running at ${Math.round(performance.now())}ms readyState=${document.readyState}` +
@@ -406,8 +419,8 @@ function reportState() {
 
   document.addEventListener(ACTION_EVENT, (e) => {
     try {
-      const { action, value } = JSON.parse((e as CustomEvent).detail);
-      handleAction(action, value || 0);
+      const { action, value, arg } = JSON.parse((e as CustomEvent).detail);
+      handleAction(action, value || 0, typeof arg === 'string' ? arg : '');
     } catch (_) {}
   });
 

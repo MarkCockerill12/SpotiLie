@@ -12,7 +12,9 @@
  *      source changes (page.ts); this side adds the DOM-based corroboration.
  */
 
-import { coalesced, log, pageAction, pageState, STATE_EVENT, whenBody } from './shared';
+import {
+  coalesced, coalescedTimer, log, pageAction, pageState, readNowPlaying, STATE_EVENT, whenBody,
+} from './shared';
 
 // ── Layer 1: entitlement spoofing ────────────────────────────────────────────
 
@@ -162,13 +164,7 @@ function initAudioAdGuard() {
    * device: every real item links to /album/, /track/ or /episode/ — an ad
    * links to nothing.
    */
-  const CONTENT_LINK = ['/album/', '/track/', '/episode/', '/show/', '/chapter/', '/audiobook/']
-    .flatMap((p) => [
-      `[data-testid="now-playing-widget"] a[href*="${p}"]`,
-      `[data-testid="context-item-link"][href*="${p}"]`,
-    ])
-    .join(',');
-  const hasContentLink = () => !!document.querySelector(CONTENT_LINK);
+  const hasContentLink = () => readNowPlaying().contentLinked;
 
   let adActive = false;
   let adStartedAt = 0;
@@ -185,8 +181,7 @@ function initAudioAdGuard() {
   /** Heuristic-only detections give the audio back after this long. */
   const HEURISTIC_MAX_MS = 40_000;
 
-  const nowPlayingTitle = () =>
-    (document.querySelector('[data-testid="context-item-info-title"]')?.textContent || '').trim();
+  const nowPlayingTitle = () => readNowPlaying().title;
 
   adDebug.get = () => [
     `active=${adActive}`,
@@ -215,7 +210,7 @@ function initAudioAdGuard() {
       pageState.ad ||
       (!musicPlaying && (
         !!document.querySelector(AD_ELEMENT_SELECTOR) ||
-        (document.querySelector('[data-testid="context-item-link"]')?.getAttribute('href') || '').includes('/ad/') ||
+        readNowPlaying().adLinked ||
         (playing && !linked && (AD_TITLE.test(document.title || '') || AD_TITLE.test(nowPlayingTitle())))
       ));
 
@@ -256,7 +251,8 @@ function initAudioAdGuard() {
   // Time-based weak signal needs a tick; state changes from the page world and
   // player DOM mutations trigger an immediate check on top.
   setInterval(check, 500);
-  const scheduleCheck = coalesced(check);
+  // Timer, not rAF: ads must be caught with the screen off too.
+  const scheduleCheck = coalescedTimer(check, 30);
   document.addEventListener(STATE_EVENT, scheduleCheck);
 
   whenBody(() => {

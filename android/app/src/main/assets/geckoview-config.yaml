@@ -1,0 +1,24 @@
+# Gecko engine prefs, loaded via GeckoRuntimeSettings.configFilePath (honoured in
+# every build type when the path is explicit — verified in GeckoRuntime bytecode).
+#
+# Goal: a smaller memory footprint, so Android's low-memory killer reaches for
+# SpotiLIE later. On the S23U the Spotify tab alone is ~400 MB RSS and several
+# spare Gecko processes sat alongside it.
+prefs:
+  # No pre-launched spare content process. It exists to make *new tabs* open
+  # faster; this app only ever has one tab.
+  dom.ipc.processPrelaunch.enabled: false
+  # One web content process is all a single-tab player needs.
+  dom.ipc.processCount: 1
+  # Back/forward cache keeps whole documents alive; the SPA never needs it.
+  browser.sessionhistory.max_total_viewers: 0
+  # Decoded image cache cap (KB). Default scales with device RAM (~1 GB+ on a
+  # 12 GB phone); artwork grids refill it fast and it is cheap to re-decode.
+  image.mem.surfacecache.max_size_kb: 65536
+  # In-memory HTTP cache (KB). The disk cache still serves repeat requests.
+  browser.cache.memory.capacity: 16384
+  # Keep fission's architecture ON — turning fission off (fissionEnabled(false))
+  # broke touch handling: a new touch could no longer stop a running fling
+  # (measured on device, 2026-11-05). Instead tell it to isolate nothing, so
+  # cross-site frames (Spotify's hidden reCAPTCHA) share the one web process.
+  fission.webContentIsolationStrategy: 0

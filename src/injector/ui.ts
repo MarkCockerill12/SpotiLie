@@ -27,6 +27,7 @@ const GAP       = 8;    // breathing room between content, mini player and nav
 const root = document.documentElement;
 const PLAYER_OPEN = 'spotilie-player-open';
 const LIBRARY_OPEN = 'spotilie-library-open';
+const NATIVE_PLAYER = 'spotilie-native-player';
 
 export function initUI() {
   const style = document.createElement('style');
@@ -61,10 +62,14 @@ export function initUI() {
     }
   });
 
+  // The mini + full-screen player are native now (NowPlayingUi.kt). Spotify's
+  // bar stays in the DOM — invisible, untouchable — because its text is where
+  // metadata is read from and its buttons are what page actions click.
+  root.classList.add(NATIVE_PLAYER);
+
   fixViewport();
   initNavHeightListener();
   initBottomNav();
-  initPlayerSheet();
   initOverlayBridge();
   hideDesktopPromos();
 }
@@ -127,62 +132,6 @@ function ensureLibraryExpanded() {
     toggle?.click();
     log(`library expanded via toggle (found=${!!toggle})`);
   }, 250);
-}
-
-/**
- * Mini player → full-screen player.
- *
- * The bar is Spotify's React tree, so nothing is moved in the DOM: both states
- * are pure CSS keyed off a class on <html>. The one addition is a high-res
- * artwork element, which lives in <body> rather than inside React's subtree so
- * a re-render can never drop it.
- */
-function initPlayerSheet() {
-  const art = document.createElement('img');
-  art.id = 'spotilie-big-art';
-  art.alt = '';
-
-  const close = document.createElement('button');
-  close.id = 'spotilie-player-close';
-  close.setAttribute('aria-label', 'Close player');
-  close.innerHTML =
-    '<svg viewBox="0 0 24 24"><path d="M2.793 8.043a1 1 0 0 1 1.414 0L12 15.836l7.793-7.793a1 1 0 1 1 1.414 1.414L12 18.664 2.793 9.457a1 1 0 0 1 0-1.414z"/></svg>';
-  close.addEventListener('click', () => setPlayerOpen(false));
-
-  whenBody(() => document.body.append(art, close));
-
-  const refreshArt = () => {
-    const img = document.querySelector(
-      '[data-testid="now-playing-widget"] img, [data-testid="now-playing-bar"] [data-testid="cover-art-image"]'
-    ) as HTMLImageElement | null;
-    // The bar loads a 64px thumbnail; ask the CDN for the 640px rendition.
-    const src = (img?.src || '').replace(/ab67616d0000(4851|1e02)/, 'ab67616d0000b273');
-    if (src && art.getAttribute('src') !== src) art.src = src;
-  };
-
-  let artTimer = 0;
-  document.addEventListener('spotilie-player-toggle', () => {
-    window.clearInterval(artTimer);
-    if (root.classList.contains(PLAYER_OPEN)) {
-      refreshArt();
-      artTimer = window.setInterval(refreshArt, 1000);
-    }
-  });
-
-  // In the mini player, real buttons (play, next, like) keep working; a tap
-  // anywhere else on the bar — artwork, title, empty space — expands it. The
-  // title is a link to the album, so this runs in the capture phase to expand
-  // instead of navigating away.
-  document.addEventListener('click', (e) => {
-    if (!e.isTrusted || root.classList.contains(PLAYER_OPEN)) return;
-    const target = e.target as Element | null;
-    if (!target?.closest?.('[data-testid="now-playing-bar"]')) return;
-    const button = target.closest('button');
-    if (button && button.getAttribute('data-testid') !== 'cover-art-button') return;
-    e.preventDefault();
-    e.stopPropagation();
-    setPlayerOpen(true);
-  }, true);
 }
 
 /**
@@ -883,6 +832,15 @@ function buildCSS(): string {
     html.${LIBRARY_OPEN} #main-view,
     html.${LIBRARY_OPEN} main[data-testid="main-view"] {
       visibility: hidden !important;
+    }
+
+    /* Native player drawn on top: keep Spotify's bar alive but unseen. Its slot
+       (--player-bottom / --bottom-h) is still reserved, which is exactly where
+       the native mini player sits. Programmatic .click() still works. */
+    html.${NATIVE_PLAYER} [data-testid="now-playing-bar"],
+    html.${NATIVE_PLAYER} [data-testid="now-playing-bar"] * {
+      visibility: hidden !important;
+      pointer-events: none !important;
     }
   `;
 }

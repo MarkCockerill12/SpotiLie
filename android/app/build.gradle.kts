@@ -16,8 +16,8 @@ android {
         targetSdk = 36
         // Stays above the 1000 the old Tauri-generated build shipped, so the
         // app updates in place and keeps its Spotify session cookies.
-        versionCode = 1002
-        versionName = "3.0.0"
+        versionCode = 1003
+        versionName = "3.1.0"
 
         // Diagnostics (verbose port logging, network verdicts, the adb JS-eval
         // receiver) are opt-in via `build.ps1 -Debug`, NOT tied to the debug
